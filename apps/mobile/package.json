@@ -1,0 +1,17 @@
+{
+  "name": "@project-jarvis/mobile",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "lint": "echo \"Add lint script\"",
+    "typecheck": "echo \"Add typecheck script\""
+  },
+  "dependencies": {
+    "expo": "^52.0.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0"
+  }
+}
