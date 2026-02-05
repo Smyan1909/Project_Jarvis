@@ -50,3 +50,5 @@ apps/mobile/ios/
 # IDE
 .vscode/
 .idea/
+
+.pnpm-store/**
