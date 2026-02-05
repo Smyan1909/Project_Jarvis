@@ -11,5 +11,8 @@
     "dev:mobile": "pnpm -C apps/mobile start",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
+  },
+  "dependencies": {
+    "expo": "^54.0.0"
   }
 }

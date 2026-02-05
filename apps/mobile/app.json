@@ -3,6 +3,12 @@
     "name": "Project Jarvis",
     "slug": "project-jarvis",
     "version": "0.1.0",
-    "sdkVersion": "52.0.0"
+    "sdkVersion": "54.0.0",
+    "android": {
+      "package": "com.anonymous.projectjarvis"
+    },
+    "ios": {
+      "bundleIdentifier": "com.anonymous.projectjarvis"
+    }
   }
 }
