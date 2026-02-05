@@ -34,3 +34,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+tsconfig.tsbuildinfo
+
+# Expo/React Native
+.expo/
+dist/
+web-build/
+node_modules/
+.metro/
+
+# IDE
+.vscode/
+.idea/
