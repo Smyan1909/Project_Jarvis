@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 
-const server = createServer((req, res) => {
+const server = createServer((req: any, res: any) => {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ status: "ok" }));
 });

@@ -18,6 +18,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared-types
     devDependencies:
+      '@types/node':
+        specifier: ^25.2.1
+        version: 25.2.1
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -1093,6 +1096,9 @@ packages:
 
   '@types/node@25.2.0':
     resolution: {integrity: sha512-DZ8VwRFUNzuqJ5khrvwMXHmvPe+zGayJhr2CDNiKB1WBE1ST8Djl00D0IC4vvNmHMdj6DlbYRIaFE7WHjlDl5w==}
+
+  '@types/node@25.2.1':
+    resolution: {integrity: sha512-CPrnr8voK8vC6eEtyRzvMpgp3VyVRhgclonE7qYi6P9sXwYb59ucfrnmFBTaP0yUi8Gk4yZg/LlTJULGxvTNsg==}
 
   '@types/prop-types@15.7.15':
     resolution: {integrity: sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==}
@@ -4656,6 +4662,10 @@ snapshots:
       '@types/node': 25.2.0
 
   '@types/node@25.2.0':
+    dependencies:
+      undici-types: 7.16.0
+
+  '@types/node@25.2.1':
     dependencies:
       undici-types: 7.16.0
 
