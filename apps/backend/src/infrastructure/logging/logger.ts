@@ -1,0 +1,66 @@
+import { randomUUID } from 'crypto';
+
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+interface LogContext {
+    correlationId?: string;
+    userId?: string;
+    runId?: string;
+    [key: string]: unknown;
+}
+
+class Logger {
+    private context: LogContext = {};
+
+    child(context: LogContext): Logger {
+        const child = new Logger();
+        child.context = { ...this.context, ...context };
+        return child;
+    }
+
+    private log(level: LogLevel, message: string, data?: Record<string, unknown>) {
+        const entry = {
+            timestamp: new Date().toISOString(),
+            level,
+            message,
+            ...this.context,
+            ...data,
+        };
+
+        // In production, send to log aggregator
+        // For now, structured JSON to stdout
+        console.log(JSON.stringify(entry));
+    }
+
+    debug(message: string, data?: Record<string, unknown>) {
+        if (process.env.NODE_ENV !== 'production') {
+            this.log('debug', message, data);
+        }
+    }
+
+    info(message: string, data?: Record<string, unknown>) {
+        this.log('info', message, data);
+    }
+
+    warn(message: string, data?: Record<string, unknown>) {
+        this.log('warn', message, data);
+    }
+
+    error(message: string, error?: Error, data?: Record<string, unknown>) {
+        this.log('error', message, {
+            ...data,
+            error: error ? { message: error.message, stack: error.stack } : undefined,
+        });
+    }
+}
+
+export const logger = new Logger();
+
+// Middleware to add correlation ID
+export function correlationMiddleware(req: any, res: any, next: any) {
+    const correlationId = req.headers['x-correlation-id'] || randomUUID();
+    req.correlationId = correlationId;
+    req.logger = logger.child({ correlationId });
+    res.setHeader('x-correlation-id', correlationId);
+    next();
+}
