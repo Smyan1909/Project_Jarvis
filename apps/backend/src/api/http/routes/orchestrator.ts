@@ -18,6 +18,7 @@ import { SubAgentManager } from '../../../application/services/SubAgentManager.j
 import { LoopDetectionService } from '../../../application/services/LoopDetectionService.js';
 import { ContextManagementService } from '../../../application/services/ContextManagementService.js';
 import { TokenCounterService } from '../../../application/services/TokenCounterService.js';
+import { ConversationHistoryService } from '../../../application/services/ConversationHistoryService.js';
 import {
   ToolRegistry,
   registerBuiltInTools,
@@ -40,6 +41,10 @@ import {
   knowledgeGraph,
   orchestratorStateRepository,
 } from '../../../services/index.js';
+import { InMemoryMemoryStore } from '../../../adapters/memory/InMemoryMemoryStore.js';
+import { InMemoryKnowledgeGraph } from '../../../adapters/kg/InMemoryKnowledgeGraph.js';
+import { VercelEmbeddingAdapter } from '../../../adapters/embedding/VercelEmbeddingAdapter.js';
+import { MessageRepository, ConversationSummaryRepository, UserRepository, AgentRunRepository } from '../../../adapters/storage/index.js';
 
 // MCP Integration
 import { MCPClientManager, type MCPConfigLoader } from '../../../adapters/mcp/MCPClientManager.js';
@@ -81,6 +86,46 @@ const eventStreamAdapter = new OrchestratorEventStreamAdapter(cacheAdapter);
 
 // Create tool registry with all tools registered
 const toolRegistry = new ToolRegistry();
+
+// Create repositories for conversation history and agent runs
+const messageRepository = new MessageRepository();
+const conversationSummaryRepository = new ConversationSummaryRepository();
+const userRepository = new UserRepository();
+const agentRunRepository = new AgentRunRepository();
+
+// Create conversation history service (singleton)
+let conversationHistoryService: ConversationHistoryService | null = null;
+
+// Test user ID for development (will be replaced with auth in production)
+let testUserId: string | null = null;
+
+/**
+ * Get or create a test user for development.
+ * TODO: Replace with proper auth middleware in production.
+ */
+async function getTestUserId(): Promise<string> {
+  if (testUserId) return testUserId;
+
+  const testEmail = 'test-orchestrator@jarvis.local';
+  
+  // Try to find existing test user
+  const existingUser = await userRepository.findByEmail(testEmail);
+  if (existingUser) {
+    testUserId = existingUser.id;
+    logger.info('Using existing test user', { userId: testUserId });
+    return testUserId;
+  }
+
+  // Create a new test user
+  const newUser = await userRepository.create({
+    email: testEmail,
+    passwordHash: 'test-hash-not-for-login',
+    displayName: 'Test Orchestrator User',
+  });
+  testUserId = newUser.id;
+  logger.info('Created test user for development', { userId: testUserId });
+  return testUserId;
+}
 
 // =============================================================================
 // MCP Client Manager Setup
@@ -210,6 +255,16 @@ function createOrchestratorService(onEvent: (event: StreamEvent) => void): Orche
   const summaryLLM = llmRouter.getProvider('fast'); // Use fast model for summarization
   const contextManager = new ContextManagementService(tokenCounter, summaryLLM);
   
+  // Create conversation history service (lazy init, singleton)
+  if (!conversationHistoryService) {
+    conversationHistoryService = new ConversationHistoryService(
+      messageRepository,
+      conversationSummaryRepository,
+      tokenCounter,
+      summaryLLM
+    );
+  }
+  
   const planService = new TaskPlanService(stateRepository, cacheAdapter);
   const loopDetection = new LoopDetectionService(cacheAdapter, stateRepository);
 
@@ -235,6 +290,8 @@ function createOrchestratorService(onEvent: (event: StreamEvent) => void): Orche
     agentManager,
     loopDetection,
     contextManager,
+    conversationHistoryService,
+    agentRunRepository,
     { onEvent }
   );
 }
@@ -271,8 +328,8 @@ export const orchestratorRoutes = new Hono();
  */
 orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async (c) => {
   const { input } = c.req.valid('json');
-  // For now, use a placeholder userId - in production this comes from auth middleware
-  const userId = 'anonymous';
+  // TODO: Get userId from auth middleware in production
+  const userId = await getTestUserId();
   const runId = uuidv4();
 
   const log = logger.child({ runId, userId });
@@ -439,4 +496,78 @@ orchestratorRoutes.post('/run/:runId/cancel', async (c) => {
   });
 
   return c.json({ success: true, message: 'Run cancelled' });
+});
+
+// =============================================================================
+// Conversation History Routes
+// =============================================================================
+
+/**
+ * GET /api/v1/orchestrator/conversation/history
+ * Get conversation history for the current user.
+ * 
+ * Query params:
+ * - limit: number of messages to return (default: 50)
+ */
+orchestratorRoutes.get('/conversation/history', async (c) => {
+  // TODO: Get userId from auth middleware in production
+  const userId = await getTestUserId();
+  const limit = parseInt(c.req.query('limit') || '50', 10);
+
+  if (!conversationHistoryService) {
+    return c.json({ error: 'Conversation history service not initialized' }, 500);
+  }
+
+  const { messages, totalCount } = await conversationHistoryService.getHistory(userId, limit);
+
+  return c.json({
+    messages: messages.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      metadata: m.metadata,
+      createdAt: m.createdAt,
+    })),
+    totalCount,
+    hasMore: totalCount > messages.length,
+  });
+});
+
+/**
+ * DELETE /api/v1/orchestrator/conversation/messages/:messageId
+ * Delete a specific message from the conversation history.
+ */
+orchestratorRoutes.delete('/conversation/messages/:messageId', async (c) => {
+  // TODO: Get userId from auth middleware in production
+  const userId = await getTestUserId();
+  const messageId = c.req.param('messageId');
+
+  if (!conversationHistoryService) {
+    return c.json({ error: 'Conversation history service not initialized' }, 500);
+  }
+
+  const deleted = await conversationHistoryService.deleteMessage(userId, messageId);
+  
+  if (!deleted) {
+    return c.json({ error: 'Message not found or not owned by user' }, 404);
+  }
+
+  return c.json({ success: true, message: 'Message deleted' });
+});
+
+/**
+ * DELETE /api/v1/orchestrator/conversation/history
+ * Clear all conversation history for the current user.
+ */
+orchestratorRoutes.delete('/conversation/history', async (c) => {
+  // TODO: Get userId from auth middleware in production
+  const userId = await getTestUserId();
+
+  if (!conversationHistoryService) {
+    return c.json({ error: 'Conversation history service not initialized' }, 500);
+  }
+
+  await conversationHistoryService.clearHistory(userId);
+
+  return c.json({ success: true, message: 'Conversation history cleared' });
 });

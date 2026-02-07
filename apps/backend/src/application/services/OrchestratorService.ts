@@ -25,10 +25,12 @@ import type { ToolInvokerPort } from '../../ports/ToolInvokerPort.js';
 import type { MemoryStorePort } from '../../ports/MemoryStorePort.js';
 import type { IOrchestratorStateRepository } from '../../adapters/orchestrator/OrchestratorStateRepository.js';
 import type { IOrchestratorCacheAdapter } from '../../adapters/orchestrator/OrchestratorCacheAdapter.js';
+import type { AgentRunRepository } from '../../adapters/storage/agent-run-repository.js';
 import { TaskPlanService, type TaskPlanInput } from './TaskPlanService.js';
 import { SubAgentManager, type AgentHandle } from './SubAgentManager.js';
 import { LoopDetectionService } from './LoopDetectionService.js';
 import type { ContextManagementService } from './ContextManagementService.js';
+import type { ConversationHistoryService } from './ConversationHistoryService.js';
 import {
   ORCHESTRATOR_TOOLS,
   ORCHESTRATOR_ONLY_TOOL_IDS,
@@ -62,6 +64,8 @@ export interface OrchestratorRunResult {
   planId: string | null;
   tasksCompleted: number;
   tasksFailed: number;
+  /** All messages from this run (for persistence) */
+  allMessages?: LLMMessage[];
 }
 
 // =============================================================================
@@ -83,6 +87,8 @@ export class OrchestratorService {
     private agentManager: SubAgentManager,
     private loopDetection: LoopDetectionService,
     private contextManager?: ContextManagementService,
+    private conversationHistory?: ConversationHistoryService,
+    private agentRunRepository?: AgentRunRepository,
     config: OrchestratorConfig = {}
   ) {
     this.maxIterations = config.maxIterations ?? 50;
@@ -106,7 +112,19 @@ export class OrchestratorService {
     const log = logger.child({ runId, userId, service: 'OrchestratorService' });
     log.info('executeRun started', { inputLength: input.length });
 
-    // Initialize state
+    // Create agent run record in database (for message persistence)
+    let dbRunId: string | null = null;
+    if (this.agentRunRepository) {
+      try {
+        const agentRun = await this.agentRunRepository.create(userId);
+        dbRunId = agentRun.id;
+        log.debug('Agent run record created', { dbRunId });
+      } catch (error) {
+        log.warn('Failed to create agent run record, messages will not be linked to run', { error });
+      }
+    }
+
+    // Initialize in-memory state (uses provided runId for SSE events)
     const state = await this.repository.createOrchestratorState(runId, userId);
     await this.cache.setOrchestratorState(state);
     log.debug('State initialized');
@@ -119,6 +137,19 @@ export class OrchestratorService {
         message: 'Analyzing request...',
       });
       await this.repository.updateOrchestratorStatus(runId, 'planning');
+
+      // Load conversation history (if enabled)
+      let historyMessages: LLMMessage[] = [];
+      if (this.conversationHistory) {
+        log.debug('Loading conversation history');
+        const historyContext = await this.conversationHistory.loadContext(userId);
+        historyMessages = historyContext.messages;
+        log.debug('History loaded', { 
+          messageCount: historyContext.messageCount,
+          hasSummary: historyContext.hasSummary,
+          estimatedTokens: historyContext.estimatedTokens,
+        });
+      }
 
       // Retrieve relevant memories for context
       log.debug('Searching memories');
@@ -137,15 +168,37 @@ export class OrchestratorService {
       log.info('Starting orchestrator loop', { 
         model: this.llm.getModel(),
         toolCount: allTools.length,
+        historyMessageCount: historyMessages.length,
       });
       const result = await this.runOrchestratorLoop(
         userId,
         runId,
         input,
         memoryContext,
+        historyMessages,
         allTools,
         state
       );
+
+      // Persist messages and maybe summarize (if enabled)
+      if (this.conversationHistory && result.allMessages) {
+        log.debug('Persisting run messages', { dbRunId });
+        await this.conversationHistory.persistRunMessages(userId, dbRunId, result.allMessages);
+        await this.conversationHistory.maybeSummarize(userId);
+      }
+
+      // Update agent run record with final stats
+      if (this.agentRunRepository && dbRunId) {
+        try {
+          await this.agentRunRepository.updateStatus(dbRunId, {
+            status: 'completed',
+            totalTokens: result.totalTokens,
+            totalCost: result.totalCost,
+          });
+        } catch (error) {
+          log.warn('Failed to update agent run record', { dbRunId, error });
+        }
+      }
 
       // Mark as completed
       await this.repository.updateOrchestratorStatus(runId, 'completed');
@@ -206,14 +259,20 @@ export class OrchestratorService {
     runId: string,
     input: string,
     memoryContext: string,
+    historyMessages: LLMMessage[],
     tools: ToolDefinition[],
     state: OrchestratorState
   ): Promise<OrchestratorRunResult> {
     const log = logger.child({ runId, userId, method: 'runOrchestratorLoop' });
     
+    // Start with conversation history, then add current user input
     const messages: LLMMessage[] = [
+      ...historyMessages,
       { role: 'user', content: input + memoryContext },
     ];
+    
+    // Track which messages are new in this run (for persistence)
+    const newMessagesStartIndex = historyMessages.length;
 
     let totalTokens = 0;
     let totalCost = 0;
@@ -365,6 +424,7 @@ export class OrchestratorService {
               planId,
               tasksCompleted,
               tasksFailed,
+              allMessages: messages.slice(newMessagesStartIndex),
             };
           }
 
@@ -402,6 +462,7 @@ export class OrchestratorService {
           planId: null,
           tasksCompleted: 0,
           tasksFailed: 0,
+          allMessages: messages.slice(newMessagesStartIndex),
         };
       }
 
