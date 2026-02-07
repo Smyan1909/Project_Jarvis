@@ -197,7 +197,13 @@ export const ToolResultSchema = z.object({
   error: z.string().optional(),
 });
 
-export type ToolResult = z.infer<typeof ToolResultSchema>;
+// Explicitly define the type to ensure output is required
+// (z.infer<typeof z.unknown()> makes the field optional)
+export type ToolResult = {
+  success: boolean;
+  output: unknown;
+  error?: string;
+};
 
 // =============================================================================
 // Context Summary (for context management)
