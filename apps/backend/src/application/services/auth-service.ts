@@ -5,7 +5,8 @@
 // Implements JWT-based authentication with refresh token rotation.
 
 import { hash, compare } from 'bcrypt';
-import { sign, verify, type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import jwt, { type JwtPayload, type SignOptions } from 'jsonwebtoken';
+const { sign, verify } = jwt;
 import { randomBytes, createHash } from 'crypto';
 import { config } from '../../infrastructure/config/index.js';
 import { UserRepository, type User } from '../../adapters/storage/user-repository.js';
