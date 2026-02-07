@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, varchar, integer, jsonb, real, customType, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, varchar, integer, jsonb, real, customType, boolean, uniqueIndex, index } from 'drizzle-orm/pg-core';
 
 // Custom pgvector type
 const vector = customType<{ data: number[]; driverData: string }>({
@@ -33,7 +33,9 @@ export const userSecrets = pgTable('user_secrets', {
     authTag: varchar('auth_tag', { length: 64 }).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => [
+    uniqueIndex('user_secrets_user_provider_idx').on(table.userId, table.provider),
+]);
 
 export const refreshTokens = pgTable('refresh_tokens', {
     id: uuid('id').primaryKey().defaultRandom(),
@@ -56,12 +58,18 @@ export const agentRuns = pgTable('agent_runs', {
 
 export const messages = pgTable('messages', {
     id: uuid('id').primaryKey().defaultRandom(),
-    runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').references(() => agentRuns.id, { onDelete: 'set null' }), // nullable - messages can exist without a run
     role: varchar('role', { length: 20 }).notNull(), // 'user' | 'assistant' | 'system' | 'tool'
     content: text('content').notNull(),
-    toolCallId: uuid('tool_call_id'),
+    toolCallId: varchar('tool_call_id', { length: 100 }), // LLM-generated IDs (not UUIDs)
+    toolCalls: jsonb('tool_calls'), // For assistant messages with tool invocations
+    metadata: jsonb('metadata').default({}), // Subject, time gaps, intent, etc.
     createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (table) => [
+    // Index for loading user's recent conversation history
+    index('messages_user_id_created_at_idx').on(table.userId, table.createdAt),
+]);
 
 export const toolCalls = pgTable('tool_calls', {
     id: uuid('id').primaryKey().defaultRandom(),
@@ -72,6 +80,20 @@ export const toolCalls = pgTable('tool_calls', {
     status: varchar('status', { length: 20 }).notNull().default('pending'), // 'pending' | 'success' | 'error'
     durationMs: integer('duration_ms'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// === Conversation Domain ===
+// Rolling summaries of older conversation history (one per user)
+export const conversationSummaries = pgTable('conversation_summaries', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }).unique(),
+    content: text('content').notNull(),
+    summarizedMessageCount: integer('summarized_message_count').notNull(),
+    summarizedUpToMessageId: uuid('summarized_up_to_message_id').references(() => messages.id, { onDelete: 'set null' }),
+    originalTokenCount: integer('original_token_count').notNull(),
+    summaryTokenCount: integer('summary_token_count').notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 // === Memory Domain ===

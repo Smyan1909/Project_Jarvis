@@ -8,3 +8,4 @@ export * from './user-secret-repository.js';
 export * from './agent-run-repository.js';
 export * from './message-repository.js';
 export * from './tool-call-repository.js';
+export * from './conversation-summary-repository.js';
