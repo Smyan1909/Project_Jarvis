@@ -18,6 +18,7 @@ import { SecretsService } from '../application/services/secrets-service.js';
 import { PgMemoryStore } from '../adapters/memory/PgMemoryStore.js';
 import { PgKnowledgeGraph } from '../adapters/kg/PgKnowledgeGraph.js';
 import { VercelEmbeddingAdapter } from '../adapters/embedding/VercelEmbeddingAdapter.js';
+import { PgOrchestratorStateRepository } from '../adapters/orchestrator/PgOrchestratorStateRepository.js';
 
 // =============================================================================
 // Repositories
@@ -122,3 +123,14 @@ export const knowledgeGraph = new PgKnowledgeGraph(
   kgRelationRepository,
   embeddingAdapter
 );
+
+// =============================================================================
+// Orchestrator Services
+// =============================================================================
+
+/**
+ * Orchestrator state repository singleton
+ * Persists task plans, task nodes, sub-agents, and orchestrator state to PostgreSQL
+ * Implements IOrchestratorStateRepository
+ */
+export const orchestratorStateRepository = new PgOrchestratorStateRepository();

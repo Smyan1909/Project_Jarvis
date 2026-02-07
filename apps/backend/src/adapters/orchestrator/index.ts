@@ -3,5 +3,6 @@
 // =============================================================================
 
 export * from './OrchestratorStateRepository.js';
+export * from './PgOrchestratorStateRepository.js';
 export * from './OrchestratorCacheAdapter.js';
 export * from './OrchestratorEventStreamAdapter.js';
