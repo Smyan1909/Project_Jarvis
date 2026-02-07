@@ -11,6 +11,7 @@ import { healthRoutes } from './routes/health.js';
 import { chatRoutes } from './routes/chat.js';
 import { orchestratorRoutes } from './routes/orchestrator.js';
 import { authRoutes } from './routes/auth.js';
+import { secretsRoutes } from './routes/secrets.js';
 import { AppError } from '../../domain/errors/index.js';
 import type { AuthVariables } from './middleware/auth.js';
 
@@ -67,6 +68,7 @@ app.route('/health', healthRoutes);
 
 // API v1 routes
 app.route('/api/v1/auth', authRoutes);
+app.route('/api/v1/secrets', secretsRoutes);
 app.route('/api/v1/chat', chatRoutes);
 app.route('/api/v1/orchestrator', orchestratorRoutes);
 
