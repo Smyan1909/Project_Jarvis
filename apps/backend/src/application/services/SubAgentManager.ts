@@ -20,6 +20,7 @@ import type { ToolInvokerPort } from '../../ports/ToolInvokerPort.js';
 import type { IOrchestratorStateRepository } from '../../adapters/orchestrator/OrchestratorStateRepository.js';
 import type { IOrchestratorCacheAdapter } from '../../adapters/orchestrator/OrchestratorCacheAdapter.js';
 import { SubAgentRunner, type SubAgentEvent } from './SubAgentRunner.js';
+import type { ContextManagementService } from './ContextManagementService.js';
 
 // =============================================================================
 // Agent Handle (for external management)
@@ -61,7 +62,8 @@ export class SubAgentManager {
     private llmProvider: LLMProviderPort,
     private toolInvoker: ToolInvokerPort,
     private repository: IOrchestratorStateRepository,
-    private cache: IOrchestratorCacheAdapter
+    private cache: IOrchestratorCacheAdapter,
+    private contextManager?: ContextManagementService
   ) {}
 
   // ===========================================================================
@@ -93,7 +95,7 @@ export class SubAgentManager {
     await this.cache.setSubAgentState(state);
     await this.cache.addActiveAgent(runId, state.id);
 
-    // Create runner
+    // Create runner with optional context management
     const runner = new SubAgentRunner(
       {
         agentId: state.id,
@@ -107,7 +109,8 @@ export class SubAgentManager {
       },
       this.llmProvider,
       this.toolInvoker,
-      this.repository
+      this.repository,
+      this.contextManager
     );
 
     // Set up event forwarding

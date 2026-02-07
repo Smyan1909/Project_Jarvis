@@ -9,13 +9,15 @@ import { zValidator } from '@hono/zod-validator';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import type { StreamEvent } from '@project-jarvis/shared-types';
+import type { StreamEvent, MCPServerConfig } from '@project-jarvis/shared-types';
 
 // Services
 import { OrchestratorService } from '../../../application/services/OrchestratorService.js';
 import { TaskPlanService } from '../../../application/services/TaskPlanService.js';
 import { SubAgentManager } from '../../../application/services/SubAgentManager.js';
 import { LoopDetectionService } from '../../../application/services/LoopDetectionService.js';
+import { ContextManagementService } from '../../../application/services/ContextManagementService.js';
+import { TokenCounterService } from '../../../application/services/TokenCounterService.js';
 import {
   ToolRegistry,
   registerBuiltInTools,
@@ -37,6 +39,10 @@ import {
 import { InMemoryMemoryStore } from '../../../adapters/memory/InMemoryMemoryStore.js';
 import { InMemoryKnowledgeGraph } from '../../../adapters/kg/InMemoryKnowledgeGraph.js';
 import { VercelEmbeddingAdapter } from '../../../adapters/embedding/VercelEmbeddingAdapter.js';
+
+// MCP Integration
+import { MCPClientManager, type MCPConfigLoader } from '../../../adapters/mcp/MCPClientManager.js';
+import { CompositeToolInvoker } from '../../../adapters/tools/CompositeToolInvoker.js';
 
 // LLM and Tools
 import { llmRouter } from '../../../application/services/LLMRouterService.js';
@@ -77,8 +83,69 @@ const knowledgeGraph = new InMemoryKnowledgeGraph(embeddingAdapter);
 // Create tool registry with all tools registered
 const toolRegistry = new ToolRegistry();
 
-// Register all tools
-function initializeToolRegistry(): void {
+// =============================================================================
+// MCP Client Manager Setup
+// =============================================================================
+
+// Environment-based MCP configuration loader (for MVP)
+// In production, this would load from database via MCPServerService
+class EnvMCPConfigLoader implements MCPConfigLoader {
+  async loadConfigurations(): Promise<MCPServerConfig[]> {
+    const configs: MCPServerConfig[] = [];
+
+    // Load MCP servers from environment variables
+    // Format: MCP_SERVER_<N>_URL, MCP_SERVER_<N>_NAME, MCP_SERVER_<N>_TRANSPORT
+    // Example:
+    //   MCP_SERVER_1_URL=http://localhost:3001/mcp
+    //   MCP_SERVER_1_NAME=local-tools
+    //   MCP_SERVER_1_TRANSPORT=streamable-http
+
+    for (let i = 1; i <= 10; i++) {
+      const url = process.env[`MCP_SERVER_${i}_URL`];
+      const name = process.env[`MCP_SERVER_${i}_NAME`] || `mcp-server-${i}`;
+      const transport = (process.env[`MCP_SERVER_${i}_TRANSPORT`] || 'streamable-http') as
+        | 'streamable-http'
+        | 'sse';
+      const apiKey = process.env[`MCP_SERVER_${i}_API_KEY`];
+
+      if (url) {
+        configs.push({
+          id: `env-mcp-${i}`,
+          name,
+          url,
+          transport,
+          authType: apiKey ? 'api-key' : 'none',
+          authConfig: apiKey
+            ? {
+                type: 'api-key',
+                apiKey: {
+                  apiKey,
+                  headerName: 'Authorization',
+                  headerPrefix: 'Bearer',
+                },
+              }
+            : { type: 'none' },
+          enabled: true,
+          priority: i,
+          connectionTimeoutMs: 30000,
+          requestTimeoutMs: 60000,
+          maxRetries: 3,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+    }
+
+    return configs;
+  }
+}
+
+// Create MCP client manager (will be null if no MCP servers configured)
+let mcpClientManager: MCPClientManager | null = null;
+let compositeToolInvoker: CompositeToolInvoker | null = null;
+
+// Register all tools and initialize MCP
+async function initializeToolRegistry(): Promise<void> {
   const log = logger.child({ module: 'orchestrator.init' });
   log.info('Initializing tool registry');
 
@@ -94,14 +161,43 @@ function initializeToolRegistry(): void {
   // Web tools (web_search, web_fetch)
   registerWebTools(toolRegistry);
 
-  log.info('Tool registry initialized', {
+  log.info('Local tool registry initialized', {
     toolCount: toolRegistry.getRegisteredToolIds().length,
     tools: toolRegistry.getRegisteredToolIds(),
   });
+
+  // Initialize MCP client manager
+  try {
+    const configLoader = new EnvMCPConfigLoader();
+    const configs = await configLoader.loadConfigurations();
+
+    if (configs.length > 0) {
+      log.info('Initializing MCP client manager', { serverCount: configs.length });
+
+      mcpClientManager = new MCPClientManager(configLoader);
+      await mcpClientManager.initialize();
+
+      log.info('MCP client manager initialized', {
+        servers: mcpClientManager.getServerIds(),
+      });
+    } else {
+      log.info('No MCP servers configured, skipping MCP initialization');
+    }
+  } catch (error) {
+    log.warn('Failed to initialize MCP client manager', error as Record<string, unknown>);
+    // Continue without MCP - graceful degradation
+    mcpClientManager = null;
+  }
+
+  // Create composite tool invoker
+  compositeToolInvoker = new CompositeToolInvoker(toolRegistry, mcpClientManager);
+  log.info('Composite tool invoker created');
 }
 
 // Initialize on module load
-initializeToolRegistry();
+initializeToolRegistry().catch((error) => {
+  logger.error('Failed to initialize tool registry', error as Record<string, unknown>);
+});
 
 // =============================================================================
 // Service Factory
@@ -110,26 +206,52 @@ initializeToolRegistry();
 function createOrchestratorService(onEvent: (event: StreamEvent) => void): OrchestratorService {
   const llm = llmRouter.getPowerfulProvider();
   
+  // Create context management service for automatic summarization
+  const tokenCounter = new TokenCounterService();
+  const summaryLLM = llmRouter.getProvider('fast'); // Use fast model for summarization
+  const contextManager = new ContextManagementService(tokenCounter, summaryLLM);
+  
   const planService = new TaskPlanService(stateRepository, cacheAdapter);
   const loopDetection = new LoopDetectionService(cacheAdapter, stateRepository);
+
+  // Use composite tool invoker if available (includes MCP tools)
+  // Falls back to local tool registry if MCP not initialized yet
+  const toolInvoker = compositeToolInvoker || toolRegistry;
+
   const agentManager = new SubAgentManager(
     llm,
-    toolRegistry,
+    toolInvoker,
     stateRepository,
-    cacheAdapter
+    cacheAdapter,
+    contextManager
   );
 
   return new OrchestratorService(
     llm,
-    toolRegistry,
+    toolInvoker,
     memoryStore,
     stateRepository,
     cacheAdapter,
     planService,
     agentManager,
     loopDetection,
+    contextManager,
     { onEvent }
   );
+}
+
+/**
+ * Get the MCP client manager (for use by MCP routes)
+ */
+export function getMCPClientManager(): MCPClientManager | null {
+  return mcpClientManager;
+}
+
+/**
+ * Get the tool registry (for use by MCP routes)
+ */
+export function getToolRegistry(): ToolRegistry {
+  return toolRegistry;
 }
 
 // =============================================================================

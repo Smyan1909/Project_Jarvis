@@ -26,6 +26,7 @@ import type { LLMProviderPort, StreamChunk } from '../../ports/LLMProviderPort.j
 import type { ToolInvokerPort } from '../../ports/ToolInvokerPort.js';
 import type { IOrchestratorStateRepository } from '../../adapters/orchestrator/OrchestratorStateRepository.js';
 import { getAgentTools, AGENT_CAPABILITIES } from '../../domain/orchestrator/AgentToolScopes.js';
+import type { ContextManagementService } from './ContextManagementService.js';
 
 // =============================================================================
 // Sub-Agent Configuration
@@ -71,7 +72,8 @@ export class SubAgentRunner extends EventEmitter {
     private config: SubAgentConfig,
     private llm: LLMProviderPort,
     private toolInvoker: ToolInvokerPort,
-    private repository: IOrchestratorStateRepository
+    private repository: IOrchestratorStateRepository,
+    private contextManager?: ContextManagementService
   ) {
     super();
     this.maxIterations = config.maxIterations ?? 20;
@@ -215,10 +217,36 @@ export class SubAgentRunner extends EventEmitter {
     let cost = 0;
     let finishReason = 'stop';
 
+    // Manage context before LLM call (automatic summarization if needed)
+    let messagesToSend = this.state.messages;
+    if (this.contextManager) {
+      const contextResult = await this.contextManager.manageContext(
+        this.state.messages,
+        {
+          modelId: this.llm.getModel(),
+          systemPrompt,
+          tools,
+        }
+      );
+
+      if (contextResult.summarized && contextResult.summary) {
+        // Update state messages with summarized version
+        this.state.messages = contextResult.messages;
+        messagesToSend = contextResult.messages;
+
+        // Emit reasoning step about summarization
+        this.emitReasoning(
+          'observation',
+          `Context summarized: ${contextResult.summary.summarizedMessageCount} messages compressed ` +
+          `(${contextResult.summary.originalTokenCount} -> ${contextResult.summary.summaryTokenCount} tokens)`
+        );
+      }
+    }
+
     // Emit reasoning step for thinking
     this.emitReasoning('thinking', `Processing task: ${this.config.taskDescription}`);
 
-    for await (const chunk of this.llm.stream(this.state.messages, {
+    for await (const chunk of this.llm.stream(messagesToSend, {
       systemPrompt,
       tools: tools.length > 0 ? tools : undefined,
       temperature: 0.7,
