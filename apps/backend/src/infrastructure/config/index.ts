@@ -5,10 +5,10 @@ const envSchema = z.object({
     PORT: z.coerce.number().default(3000),
 
     // Database
-    DATABASE_URL: z.string().url(),
+    DATABASE_URL: z.string().regex(/^postgresql:\/\//, 'Must be a PostgreSQL URL'),
 
     // Redis
-    REDIS_URL: z.string().url().default('redis://localhost:6380'),
+    REDIS_URL: z.string().regex(/^redis:\/\//, 'Must be a Redis URL').default('redis://localhost:6380'),
 
     // Auth
     JWT_SECRET: z.string().min(32),
