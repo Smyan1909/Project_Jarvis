@@ -37,8 +37,8 @@ describe('MessageRepository Integration', () => {
   });
 
   afterEach(async () => {
-    // Clean up messages from test run
-    await db.delete(messages).where(sql`run_id = ${testRunId}`);
+    // Clean up messages from test user
+    await db.delete(messages).where(sql`user_id = ${testUserId}`);
   });
 
   afterAll(async () => {
@@ -54,6 +54,7 @@ describe('MessageRepository Integration', () => {
   describe('create()', () => {
     it('should create a user message', async () => {
       const message = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'user',
         content: 'Hello, how can I help?',
@@ -61,6 +62,7 @@ describe('MessageRepository Integration', () => {
 
       expect(message).toBeDefined();
       expect(message.id).toBeDefined();
+      expect(message.userId).toBe(testUserId);
       expect(message.runId).toBe(testRunId);
       expect(message.role).toBe('user');
       expect(message.content).toBe('Hello, how can I help?');
@@ -70,6 +72,7 @@ describe('MessageRepository Integration', () => {
 
     it('should create an assistant message', async () => {
       const message = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'assistant',
         content: 'I can help you with many tasks!',
@@ -80,8 +83,9 @@ describe('MessageRepository Integration', () => {
     });
 
     it('should create a tool message with toolCallId', async () => {
-      const toolCallId = '00000000-0000-0000-0000-000000000001';
+      const toolCallId = 'tool-call-001';
       const message = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'tool',
         content: '{"result": "success"}',
@@ -94,12 +98,47 @@ describe('MessageRepository Integration', () => {
 
     it('should create a system message', async () => {
       const message = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'system',
         content: 'You are a helpful assistant.',
       });
 
       expect(message.role).toBe('system');
+    });
+
+    it('should create a message without runId', async () => {
+      const message = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'Message without run',
+      });
+
+      expect(message.runId).toBeNull();
+      expect(message.userId).toBe(testUserId);
+    });
+
+    it('should create a message with metadata', async () => {
+      const message = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'Message with metadata',
+        metadata: { subject: 'Test subject', timeSinceLastMessage: '2 hours later' },
+      });
+
+      expect(message.metadata).toEqual({ subject: 'Test subject', timeSinceLastMessage: '2 hours later' });
+    });
+
+    it('should create a message with toolCalls', async () => {
+      const toolCalls = [{ id: 'tc1', name: 'get_weather', arguments: '{"city": "NYC"}' }];
+      const message = await repo.create({
+        userId: testUserId,
+        role: 'assistant',
+        content: 'Let me check the weather.',
+        toolCalls,
+      });
+
+      expect(message.toolCalls).toEqual(toolCalls);
     });
   });
 
@@ -109,21 +148,30 @@ describe('MessageRepository Integration', () => {
 
   describe('createMany()', () => {
     it('should create multiple messages at once', async () => {
-      const messages = await repo.createMany(testRunId, [
+      const result = await repo.createMany(testUserId, [
         { role: 'system', content: 'You are helpful.' },
         { role: 'user', content: 'Hello!' },
         { role: 'assistant', content: 'Hi there!' },
-      ]);
+      ], testRunId);
 
-      expect(messages.length).toBe(3);
-      expect(messages[0].role).toBe('system');
-      expect(messages[1].role).toBe('user');
-      expect(messages[2].role).toBe('assistant');
+      expect(result.length).toBe(3);
+      expect(result[0].role).toBe('system');
+      expect(result[1].role).toBe('user');
+      expect(result[2].role).toBe('assistant');
+      expect(result.every(m => m.userId === testUserId)).toBe(true);
     });
 
     it('should return empty array for empty input', async () => {
-      const messages = await repo.createMany(testRunId, []);
-      expect(messages).toEqual([]);
+      const result = await repo.createMany(testUserId, []);
+      expect(result).toEqual([]);
+    });
+
+    it('should create messages without runId', async () => {
+      const result = await repo.createMany(testUserId, [
+        { role: 'user', content: 'No run' },
+      ]);
+
+      expect(result[0].runId).toBeNull();
     });
   });
 
@@ -134,6 +182,7 @@ describe('MessageRepository Integration', () => {
   describe('findById()', () => {
     it('should find a message by ID', async () => {
       const created = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'user',
         content: 'Find me!',
@@ -152,17 +201,42 @@ describe('MessageRepository Integration', () => {
     });
   });
 
+  describe('findByIdAndUser()', () => {
+    it('should find a message by ID with user check', async () => {
+      const created = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'User scoped find',
+      });
+
+      const found = await repo.findByIdAndUser(created.id, testUserId);
+      expect(found).toBeDefined();
+      expect(found!.id).toBe(created.id);
+    });
+
+    it('should return null for wrong user', async () => {
+      const created = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'Wrong user test',
+      });
+
+      const found = await repo.findByIdAndUser(created.id, '00000000-0000-0000-0000-000000000000');
+      expect(found).toBeNull();
+    });
+  });
+
   // ===========================================================================
   // findByRun() tests
   // ===========================================================================
 
   describe('findByRun()', () => {
     it('should find all messages for a run in chronological order', async () => {
-      await repo.createMany(testRunId, [
+      await repo.createMany(testUserId, [
         { role: 'system', content: 'System message' },
         { role: 'user', content: 'User message' },
         { role: 'assistant', content: 'Assistant message' },
-      ]);
+      ], testRunId);
 
       const found = await repo.findByRun(testRunId);
 
@@ -190,12 +264,12 @@ describe('MessageRepository Integration', () => {
 
   describe('findByRunAndRole()', () => {
     it('should filter messages by role', async () => {
-      await repo.createMany(testRunId, [
+      await repo.createMany(testUserId, [
         { role: 'user', content: 'User 1' },
         { role: 'assistant', content: 'Assistant 1' },
         { role: 'user', content: 'User 2' },
         { role: 'assistant', content: 'Assistant 2' },
-      ]);
+      ], testRunId);
 
       const userMessages = await repo.findByRunAndRole(testRunId, 'user');
       const assistantMessages = await repo.findByRunAndRole(testRunId, 'assistant');
@@ -210,16 +284,16 @@ describe('MessageRepository Integration', () => {
   // findLastN() tests
   // ===========================================================================
 
-  describe('findLastN()', () => {
+  describe('findLastNByRun()', () => {
     it('should return the last N messages in chronological order', async () => {
       // Create messages individually to ensure distinct timestamps
-      await repo.create({ runId: testRunId, role: 'system', content: 'Message 1' });
-      await repo.create({ runId: testRunId, role: 'user', content: 'Message 2' });
-      await repo.create({ runId: testRunId, role: 'assistant', content: 'Message 3' });
-      await repo.create({ runId: testRunId, role: 'user', content: 'Message 4' });
-      await repo.create({ runId: testRunId, role: 'assistant', content: 'Message 5' });
+      await repo.create({ userId: testUserId, runId: testRunId, role: 'system', content: 'Message 1' });
+      await repo.create({ userId: testUserId, runId: testRunId, role: 'user', content: 'Message 2' });
+      await repo.create({ userId: testUserId, runId: testRunId, role: 'assistant', content: 'Message 3' });
+      await repo.create({ userId: testUserId, runId: testRunId, role: 'user', content: 'Message 4' });
+      await repo.create({ userId: testUserId, runId: testRunId, role: 'assistant', content: 'Message 5' });
 
-      const last3 = await repo.findLastN(testRunId, 3);
+      const last3 = await repo.findLastNByRun(testRunId, 3);
 
       expect(last3.length).toBe(3);
       expect(last3[0].content).toBe('Message 3');
@@ -229,16 +303,59 @@ describe('MessageRepository Integration', () => {
   });
 
   // ===========================================================================
+  // User-scoped query tests
+  // ===========================================================================
+
+  describe('findRecentByUser()', () => {
+    it('should return recent messages for a user', async () => {
+      await repo.create({ userId: testUserId, role: 'user', content: 'First' });
+      await repo.create({ userId: testUserId, role: 'assistant', content: 'Second' });
+      await repo.create({ userId: testUserId, role: 'user', content: 'Third' });
+
+      const recent = await repo.findRecentByUser(testUserId, 2);
+
+      expect(recent.length).toBe(2);
+      expect(recent[0].content).toBe('Second');
+      expect(recent[1].content).toBe('Third');
+    });
+  });
+
+  describe('countByUser()', () => {
+    it('should count messages for a user', async () => {
+      await repo.create({ userId: testUserId, role: 'user', content: 'One' });
+      await repo.create({ userId: testUserId, role: 'assistant', content: 'Two' });
+
+      const count = await repo.countByUser(testUserId);
+      expect(count).toBe(2);
+    });
+  });
+
+  describe('findLastByUser()', () => {
+    it('should return the last message for a user', async () => {
+      await repo.create({ userId: testUserId, role: 'user', content: 'First' });
+      await repo.create({ userId: testUserId, role: 'assistant', content: 'Last' });
+
+      const last = await repo.findLastByUser(testUserId);
+      expect(last?.content).toBe('Last');
+    });
+
+    it('should return null for user with no messages', async () => {
+      const last = await repo.findLastByUser('00000000-0000-0000-0000-000000000000');
+      expect(last).toBeNull();
+    });
+  });
+
+  // ===========================================================================
   // countByRun() tests
   // ===========================================================================
 
   describe('countByRun()', () => {
     it('should count messages in a run', async () => {
-      await repo.createMany(testRunId, [
+      await repo.createMany(testUserId, [
         { role: 'user', content: 'One' },
         { role: 'assistant', content: 'Two' },
         { role: 'user', content: 'Three' },
-      ]);
+      ], testRunId);
 
       const count = await repo.countByRun(testRunId);
       expect(count).toBe(3);
@@ -252,6 +369,7 @@ describe('MessageRepository Integration', () => {
   describe('delete()', () => {
     it('should delete a message', async () => {
       const created = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'user',
         content: 'To be deleted',
@@ -270,17 +388,57 @@ describe('MessageRepository Integration', () => {
     });
   });
 
+  describe('deleteByIdAndUser()', () => {
+    it('should delete a message with user check', async () => {
+      const created = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'User-scoped delete',
+      });
+
+      const deleted = await repo.deleteByIdAndUser(created.id, testUserId);
+      expect(deleted).toBe(true);
+    });
+
+    it('should return false for wrong user', async () => {
+      const created = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'Wrong user delete',
+      });
+
+      const deleted = await repo.deleteByIdAndUser(created.id, '00000000-0000-0000-0000-000000000000');
+      expect(deleted).toBe(false);
+
+      // Clean up - message still exists
+      await repo.delete(created.id);
+    });
+  });
+
+  describe('deleteAllByUser()', () => {
+    it('should delete all messages for a user', async () => {
+      await repo.create({ userId: testUserId, role: 'user', content: 'One' });
+      await repo.create({ userId: testUserId, role: 'assistant', content: 'Two' });
+
+      const count = await repo.deleteAllByUser(testUserId);
+      expect(count).toBe(2);
+
+      const remaining = await repo.countByUser(testUserId);
+      expect(remaining).toBe(0);
+    });
+  });
+
   // ===========================================================================
   // deleteByRun() tests
   // ===========================================================================
 
   describe('deleteByRun()', () => {
     it('should delete all messages for a run', async () => {
-      await repo.createMany(testRunId, [
+      await repo.createMany(testUserId, [
         { role: 'user', content: 'One' },
         { role: 'assistant', content: 'Two' },
         { role: 'user', content: 'Three' },
-      ]);
+      ], testRunId);
 
       const deletedCount = await repo.deleteByRun(testRunId);
       expect(deletedCount).toBe(3);
@@ -296,8 +454,9 @@ describe('MessageRepository Integration', () => {
 
   describe('findByToolCallId()', () => {
     it('should find a tool result message by tool call ID', async () => {
-      const toolCallId = '00000000-0000-0000-0000-000000000002';
+      const toolCallId = 'tool-call-002';
       await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'tool',
         content: '{"result": "found"}',
@@ -312,7 +471,7 @@ describe('MessageRepository Integration', () => {
     });
 
     it('should return null for non-existent tool call ID', async () => {
-      const found = await repo.findByToolCallId('00000000-0000-0000-0000-000000000099');
+      const found = await repo.findByToolCallId('nonexistent-tool-call');
       expect(found).toBeNull();
     });
   });
@@ -324,6 +483,7 @@ describe('MessageRepository Integration', () => {
   describe('updateContent()', () => {
     it('should update message content', async () => {
       const created = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'assistant',
         content: 'Initial content',
@@ -340,6 +500,19 @@ describe('MessageRepository Integration', () => {
     });
   });
 
+  describe('updateMetadata()', () => {
+    it('should update message metadata', async () => {
+      const created = await repo.create({
+        userId: testUserId,
+        role: 'user',
+        content: 'Metadata test',
+      });
+
+      const updated = await repo.updateMetadata(created.id, { subject: 'New Subject' });
+      expect(updated!.metadata).toEqual({ subject: 'New Subject' });
+    });
+  });
+
   // ===========================================================================
   // appendContent() tests
   // ===========================================================================
@@ -347,6 +520,7 @@ describe('MessageRepository Integration', () => {
   describe('appendContent()', () => {
     it('should append content to an existing message', async () => {
       const created = await repo.create({
+        userId: testUserId,
         runId: testRunId,
         role: 'assistant',
         content: 'Hello',
