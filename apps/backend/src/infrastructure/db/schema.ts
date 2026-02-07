@@ -128,6 +128,17 @@ export const kgRelations = pgTable('kg_relations', {
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// === Tool Permissions Domain ===
+// User-level tool access control
+export const userToolPermissions = pgTable('user_tool_permissions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    toolId: varchar('tool_id', { length: 255 }).notNull(),
+    granted: boolean('granted').notNull().default(true),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 // === MCP Domain ===
 // Global MCP server configurations (admin-managed)
 export const mcpServers = pgTable('mcp_servers', {
