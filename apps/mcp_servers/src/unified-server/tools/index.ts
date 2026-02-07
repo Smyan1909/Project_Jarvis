@@ -5,6 +5,7 @@
 
 import { registerClaudeCodeTools } from './claude-code/index.js';
 import { registerPlaywrightTools, initializePlaywright, cleanupPlaywright } from './playwright/index.js';
+import { registerDeveloperTools } from './developer/index.js';
 import { toolRouter } from '../router/index.js';
 import { log } from '../utils/logger.js';
 
@@ -19,6 +20,9 @@ export function registerAllTools(): void {
 
   // Register Playwright tools
   registerPlaywrightTools();
+
+  // Register Developer tools (terminal, filesystem)
+  registerDeveloperTools();
 
   log.info(`All tools registered. Total: ${toolRouter.getToolCount()}`);
 }

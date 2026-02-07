@@ -40,6 +40,14 @@ export interface PlaywrightConfig {
 }
 
 /**
+ * Developer tools configuration
+ */
+export interface DeveloperConfig {
+  terminalTimeout: number; // Timeout for terminal commands in milliseconds
+  maxOutputSize: number;   // Max output size in bytes before truncation
+}
+
+/**
  * Full configuration
  */
 export interface UnifiedServerConfig {
@@ -47,6 +55,7 @@ export interface UnifiedServerConfig {
   claudeCliName: string;
   claudeDebug: boolean;
   playwright: PlaywrightConfig;
+  developer: DeveloperConfig;
   logLevel: string;
 }
 
@@ -90,6 +99,10 @@ function loadConfig(): UnifiedServerConfig {
       timeoutNavigation: parseIntValue(process.env.PLAYWRIGHT_TIMEOUT_NAVIGATION, 60000),
       extensionEnabled: parseBoolean(process.env.PLAYWRIGHT_EXTENSION_ENABLED, true),
       cdpEndpoint: process.env.PLAYWRIGHT_CDP_ENDPOINT || undefined,
+    },
+    developer: {
+      terminalTimeout: parseIntValue(process.env.TERMINAL_TIMEOUT, 5 * 60 * 1000), // 5 minutes default
+      maxOutputSize: parseIntValue(process.env.TERMINAL_MAX_OUTPUT, 1024 * 1024),  // 1MB default
     },
     logLevel: process.env.LOG_LEVEL ?? 'info',
   };
