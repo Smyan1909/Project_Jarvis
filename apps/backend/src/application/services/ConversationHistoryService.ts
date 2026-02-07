@@ -523,23 +523,133 @@ export class ConversationHistoryService {
 
   /**
    * Trim messages to fit within token budget, keeping most recent.
+   * Ensures tool call sequences are not broken (tool messages must have preceding assistant with tool_calls).
    */
   private trimToTokenBudget(messages: LLMMessage[], maxTokens: number): LLMMessage[] {
     if (messages.length === 0) return [];
+
+    // First, validate and fix message sequences
+    const validatedMessages = this.validateAndFixMessageSequence(messages);
 
     // Start from the end (most recent) and work backwards
     const result: LLMMessage[] = [];
     let tokenCount = 0;
 
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msgTokens = this.tokenCounter.estimateMessageTokens(messages[i]);
+    for (let i = validatedMessages.length - 1; i >= 0; i--) {
+      const msgTokens = this.tokenCounter.estimateMessageTokens(validatedMessages[i]);
       
       if (tokenCount + msgTokens > maxTokens && result.length > 0) {
+        // Before breaking, check if we're in the middle of a tool call sequence
+        // If the first message in result is a 'tool' message, we need to also include
+        // all preceding tool messages and their assistant message
+        if (result.length > 0 && result[0].role === 'tool') {
+          // Find and remove orphaned tool messages from the start
+          while (result.length > 0 && result[0].role === 'tool') {
+            result.shift();
+          }
+        }
         break; // Would exceed budget
       }
 
-      result.unshift(messages[i]);
+      result.unshift(validatedMessages[i]);
       tokenCount += msgTokens;
+    }
+
+    // Final validation: ensure we don't start with a tool message
+    while (result.length > 0 && result[0].role === 'tool') {
+      result.shift();
+    }
+
+    return result;
+  }
+
+  /**
+   * Validate and fix message sequences to ensure OpenAI API compatibility.
+   * Rules:
+   * - Tool messages must be preceded by an assistant message with tool_calls
+   * - Assistant messages with tool_calls must be followed by matching tool messages
+   */
+  private validateAndFixMessageSequence(messages: LLMMessage[]): LLMMessage[] {
+    const result: LLMMessage[] = [];
+    let lastAssistantWithToolCalls: LLMMessage | null = null;
+    const pendingToolCallIds = new Set<string>();
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      if (msg.role === 'assistant') {
+        // If there are pending tool calls from a previous assistant, those tool results are missing
+        // We need to skip those orphaned sequences
+        if (pendingToolCallIds.size > 0) {
+          this.log.warn('Orphaned assistant message with pending tool calls, removing', {
+            pendingCount: pendingToolCallIds.size,
+          });
+          // Remove the previous assistant message that had tool_calls without results
+          if (result.length > 0 && result[result.length - 1] === lastAssistantWithToolCalls) {
+            result.pop();
+          }
+          pendingToolCallIds.clear();
+        }
+
+        result.push(msg);
+
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          lastAssistantWithToolCalls = msg;
+          for (const tc of msg.toolCalls) {
+            pendingToolCallIds.add(tc.id);
+          }
+        } else {
+          lastAssistantWithToolCalls = null;
+        }
+      } else if (msg.role === 'tool') {
+        const toolCallId = msg.toolCallId;
+        
+        if (!toolCallId || !pendingToolCallIds.has(toolCallId)) {
+          // This tool message doesn't match any pending tool call - skip it
+          this.log.warn('Orphaned tool message without matching tool_call, skipping', {
+            toolCallId,
+            hasPending: pendingToolCallIds.size > 0,
+          });
+          continue;
+        }
+
+        result.push(msg);
+        pendingToolCallIds.delete(toolCallId);
+
+        // If all tool calls are satisfied, clear the reference
+        if (pendingToolCallIds.size === 0) {
+          lastAssistantWithToolCalls = null;
+        }
+      } else {
+        // user or system message
+        // If there are pending tool calls, that sequence is broken
+        if (pendingToolCallIds.size > 0) {
+          this.log.warn('Tool call sequence interrupted by user/system message, removing incomplete sequence', {
+            role: msg.role,
+            pendingCount: pendingToolCallIds.size,
+          });
+          // Remove the orphaned assistant message
+          if (result.length > 0 && result[result.length - 1] === lastAssistantWithToolCalls) {
+            result.pop();
+          }
+          pendingToolCallIds.clear();
+          lastAssistantWithToolCalls = null;
+        }
+
+        result.push(msg);
+      }
+    }
+
+    // If there are still pending tool calls at the end, the sequence is incomplete
+    if (pendingToolCallIds.size > 0 && lastAssistantWithToolCalls) {
+      this.log.warn('Incomplete tool call sequence at end of history, removing', {
+        pendingCount: pendingToolCallIds.size,
+      });
+      // Remove the assistant message and any partial tool results
+      const assistantIndex = result.indexOf(lastAssistantWithToolCalls);
+      if (assistantIndex >= 0) {
+        result.splice(assistantIndex);
+      }
     }
 
     return result;

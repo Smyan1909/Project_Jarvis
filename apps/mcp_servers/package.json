@@ -1,0 +1,47 @@
+{
+  "name": "@project-jarvis/mcp-servers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./unified-server": {
+      "import": "./dist/unified-server/index.js",
+      "types": "./dist/unified-server/index.d.ts"
+    }
+  },
+  "scripts": {
+    "dev": "tsx watch ./src/test-server.ts",
+    "dev:unified": "tsx ./src/unified-server/main.ts",
+    "dev:unified:watch": "tsx watch ./src/unified-server/main.ts",
+    "start:unified": "node ./dist/unified-server/main.js",
+    "build": "tsc -p tsconfig.json",
+    "lint": "echo \"Add lint script\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:manual": "tsx ./src/test-manual.ts",
+    "test:server": "tsx ./src/test-server.ts"
+  },
+  "dependencies": {
+    "@composio/core": "^0.6.3",
+    "@hono/node-server": "^1.14.1",
+    "@hono/zod-validator": "^0.4.3",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "dotenv": "^17.2.4",
+    "hono": "^4.7.10",
+    "playwright": "^1.52.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3",
+    "vitest": "^4.0.18"
+  }
+}

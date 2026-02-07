@@ -149,6 +149,8 @@ export const ToolParameterSchema: z.ZodType<ToolParameter> = z.lazy(() =>
     // For object types - nested properties
     properties: z.record(z.string(), ToolParameterSchema).optional(),
     required: z.array(z.string()).optional(),
+    // Allow arbitrary additional properties (for dynamic objects)
+    additionalProperties: z.boolean().optional(),
   })
 );
 
@@ -160,6 +162,8 @@ export interface ToolParameter {
   // For object types - nested properties
   properties?: Record<string, ToolParameter>;
   required?: string[];
+  // Allow arbitrary additional properties (for dynamic objects like args: Record<string, unknown>)
+  additionalProperties?: boolean;
 }
 
 // =============================================================================
