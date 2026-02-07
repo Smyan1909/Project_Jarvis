@@ -4,6 +4,7 @@ import {
   ReasoningStepSchema,
   InterventionActionSchema,
 } from '../domain/orchestrator.js';
+import { MCPConnectionStateSchema } from '../domain/mcp.js';
 
 // =============================================================================
 // Agent Token Event
@@ -245,6 +246,92 @@ export const OrchestratorStatusEventSchema = z.object({
 export type OrchestratorStatusEvent = z.infer<typeof OrchestratorStatusEventSchema>;
 
 // =============================================================================
+// MCP EVENTS
+// =============================================================================
+
+// =============================================================================
+// MCP Server Connected Event
+// =============================================================================
+
+export const MCPServerConnectedEventSchema = z.object({
+  type: z.literal('mcp.server_connected'),
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  toolCount: z.number().int().nonnegative(),
+});
+
+export type MCPServerConnectedEvent = z.infer<typeof MCPServerConnectedEventSchema>;
+
+// =============================================================================
+// MCP Server Disconnected Event
+// =============================================================================
+
+export const MCPServerDisconnectedEventSchema = z.object({
+  type: z.literal('mcp.server_disconnected'),
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  reason: z.string().optional(),
+});
+
+export type MCPServerDisconnectedEvent = z.infer<typeof MCPServerDisconnectedEventSchema>;
+
+// =============================================================================
+// MCP Server Error Event
+// =============================================================================
+
+export const MCPServerErrorEventSchema = z.object({
+  type: z.literal('mcp.server_error'),
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  error: z.string(),
+  willRetry: z.boolean(),
+});
+
+export type MCPServerErrorEvent = z.infer<typeof MCPServerErrorEventSchema>;
+
+// =============================================================================
+// MCP Tool Discovered Event
+// =============================================================================
+
+export const MCPToolDiscoveredEventSchema = z.object({
+  type: z.literal('mcp.tool_discovered'),
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  toolName: z.string(),
+  toolDescription: z.string().optional(),
+});
+
+export type MCPToolDiscoveredEvent = z.infer<typeof MCPToolDiscoveredEventSchema>;
+
+// =============================================================================
+// MCP Connection State Change Event
+// =============================================================================
+
+export const MCPConnectionStateChangeEventSchema = z.object({
+  type: z.literal('mcp.connection_state_change'),
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  previousState: MCPConnectionStateSchema,
+  newState: MCPConnectionStateSchema,
+});
+
+export type MCPConnectionStateChangeEvent = z.infer<typeof MCPConnectionStateChangeEventSchema>;
+
+// =============================================================================
+// MCP Event (Discriminated Union)
+// =============================================================================
+
+export const MCPEventSchema = z.discriminatedUnion('type', [
+  MCPServerConnectedEventSchema,
+  MCPServerDisconnectedEventSchema,
+  MCPServerErrorEventSchema,
+  MCPToolDiscoveredEventSchema,
+  MCPConnectionStateChangeEventSchema,
+]);
+
+export type MCPEvent = z.infer<typeof MCPEventSchema>;
+
+// =============================================================================
 // Orchestrator Event (Discriminated Union)
 // =============================================================================
 
@@ -290,6 +377,12 @@ export const StreamEventSchema = z.discriminatedUnion('type', [
   AgentInterventionEventSchema,
   AgentTerminatedEventSchema,
   OrchestratorStatusEventSchema,
+  // MCP events
+  MCPServerConnectedEventSchema,
+  MCPServerDisconnectedEventSchema,
+  MCPServerErrorEventSchema,
+  MCPToolDiscoveredEventSchema,
+  MCPConnectionStateChangeEventSchema,
 ]);
 
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

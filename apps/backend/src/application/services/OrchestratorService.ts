@@ -28,11 +28,13 @@ import type { IOrchestratorCacheAdapter } from '../../adapters/orchestrator/Orch
 import { TaskPlanService, type TaskPlanInput } from './TaskPlanService.js';
 import { SubAgentManager, type AgentHandle } from './SubAgentManager.js';
 import { LoopDetectionService } from './LoopDetectionService.js';
+import type { ContextManagementService } from './ContextManagementService.js';
 import {
   ORCHESTRATOR_TOOLS,
   ORCHESTRATOR_ONLY_TOOL_IDS,
 } from '../../domain/orchestrator/OrchestratorTools.js';
 import { ORCHESTRATOR_SYSTEM_PROMPT } from '../../domain/orchestrator/prompts.js';
+import { logger } from '../../infrastructure/logging/logger.js';
 
 // =============================================================================
 // Orchestrator Configuration
@@ -80,6 +82,7 @@ export class OrchestratorService {
     private planService: TaskPlanService,
     private agentManager: SubAgentManager,
     private loopDetection: LoopDetectionService,
+    private contextManager?: ContextManagementService,
     config: OrchestratorConfig = {}
   ) {
     this.maxIterations = config.maxIterations ?? 50;
@@ -100,9 +103,13 @@ export class OrchestratorService {
     runId: string,
     input: string
   ): Promise<OrchestratorRunResult> {
+    const log = logger.child({ runId, userId, service: 'OrchestratorService' });
+    log.info('executeRun started', { inputLength: input.length });
+
     // Initialize state
     const state = await this.repository.createOrchestratorState(runId, userId);
     await this.cache.setOrchestratorState(state);
+    log.debug('State initialized');
 
     try {
       // Emit starting status
@@ -114,15 +121,23 @@ export class OrchestratorService {
       await this.repository.updateOrchestratorStatus(runId, 'planning');
 
       // Retrieve relevant memories for context
+      log.debug('Searching memories');
       const memories = await this.memoryStore.search(userId, input, 5);
       const memoryContext = memories.length > 0
         ? `\n\nRelevant context from memory:\n${memories.map(m => `- ${m.content}`).join('\n')}`
         : '';
+      log.debug('Memories retrieved', { count: memories.length });
 
       // Get all available tools (orchestrator + standard)
+      log.debug('Getting orchestrator tools');
       const allTools = await this.getOrchestratorTools(userId);
+      log.debug('Tools retrieved', { count: allTools.length });
 
       // Run the orchestrator loop
+      log.info('Starting orchestrator loop', { 
+        model: this.llm.getModel(),
+        toolCount: allTools.length,
+      });
       const result = await this.runOrchestratorLoop(
         userId,
         runId,
@@ -139,11 +154,21 @@ export class OrchestratorService {
         status: 'completed',
       });
 
+      log.info('executeRun completed successfully', { 
+        totalTokens: result.totalTokens,
+        success: result.success,
+      });
       return result;
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
       
+      log.error('executeRun failed', error, { 
+        errorMessage,
+        errorStack,
+      });
+
       await this.repository.updateOrchestratorStatus(runId, 'failed');
       await this.emitEvent({
         type: 'orchestrator.status',
@@ -184,6 +209,8 @@ export class OrchestratorService {
     tools: ToolDefinition[],
     state: OrchestratorState
   ): Promise<OrchestratorRunResult> {
+    const log = logger.child({ runId, userId, method: 'runOrchestratorLoop' });
+    
     const messages: LLMMessage[] = [
       { role: 'user', content: input + memoryContext },
     ];
@@ -199,40 +226,92 @@ export class OrchestratorService {
     const activeAgents = new Map<string, AgentHandle>();
 
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      log.debug('Starting iteration', { iteration, messageCount: messages.length });
+      
       // Check for active agents that have completed
       await this.checkCompletedAgents(runId, activeAgents);
+
+      // Manage context before LLM call (automatic summarization if needed)
+      let messagesToSend = messages;
+      if (this.contextManager) {
+        const contextResult = await this.contextManager.manageContext(
+          messages,
+          {
+            modelId: this.llm.getModel(),
+            systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+            tools,
+          }
+        );
+
+        if (contextResult.summarized && contextResult.summary) {
+          // Replace messages array with summarized version
+          messages.length = 0;
+          messages.push(...contextResult.messages);
+          messagesToSend = messages;
+
+          log.info('Context summarized', {
+            summarizedMessages: contextResult.summary.summarizedMessageCount,
+            originalTokens: contextResult.summary.originalTokenCount,
+            newTokens: contextResult.summary.summaryTokenCount,
+          });
+
+          await this.emitEvent({
+            type: 'orchestrator.status',
+            status: 'executing',
+            message: 'Context summarized to fit within limits',
+          });
+        }
+      }
 
       // Stream LLM response
       let content = '';
       const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
-      for await (const chunk of this.llm.stream(messages, {
-        systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-        tools,
-        temperature: 0.7,
-        maxTokens: 4096,
-      })) {
-        switch (chunk.type) {
-          case 'token':
-            content += chunk.token;
-            // Only emit tokens if we're in direct response mode
-            if (!state.plan) {
-              await this.emitEvent({ type: 'agent.token', token: chunk.token });
-            }
-            break;
+      try {
+        log.debug('Starting LLM stream', { 
+          model: this.llm.getModel(),
+          toolCount: tools.length,
+        });
+        
+        for await (const chunk of this.llm.stream(messagesToSend, {
+          systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+          tools,
+          temperature: 0.7,
+          maxTokens: 4096,
+        })) {
+          switch (chunk.type) {
+            case 'token':
+              content += chunk.token;
+              // Only emit tokens if we're in direct response mode
+              if (!state.plan) {
+                await this.emitEvent({ type: 'agent.token', token: chunk.token });
+              }
+              break;
 
-          case 'tool_call':
-            toolCalls.push(chunk.toolCall);
-            break;
+            case 'tool_call':
+              log.debug('Tool call received', { toolName: chunk.toolCall.name });
+              toolCalls.push(chunk.toolCall);
+              break;
 
-          case 'done':
-            totalTokens += chunk.response.usage.totalTokens;
-            totalCost += this.llm.calculateCost(
-              chunk.response.usage.promptTokens,
-              chunk.response.usage.completionTokens
-            );
-            break;
+            case 'done':
+              log.debug('LLM stream done', { 
+                usage: chunk.response.usage,
+                finishReason: chunk.response.finishReason,
+              });
+              totalTokens += chunk.response.usage.totalTokens;
+              totalCost += this.llm.calculateCost(
+                chunk.response.usage.promptTokens,
+                chunk.response.usage.completionTokens
+              );
+              break;
+          }
         }
+      } catch (streamError) {
+        log.error('LLM stream error', streamError, {
+          iteration,
+          model: this.llm.getModel(),
+        });
+        throw streamError;
       }
 
       // Add assistant message

@@ -14,3 +14,12 @@ export * from './TaskPlanService.js';
 export * from './SubAgentManager.js';
 export * from './SubAgentRunner.js';
 export * from './LoopDetectionService.js';
+
+// Context Management
+export * from './ContextManagementService.js';
+export * from './TokenCounterService.js';
+
+// Tool Registry and Tools
+export * from './ToolRegistry.js';
+export * from './MemoryTools.js';
+export * from './WebTools.js';

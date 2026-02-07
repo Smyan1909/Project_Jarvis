@@ -9,13 +9,21 @@ import { zValidator } from '@hono/zod-validator';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import type { StreamEvent } from '@project-jarvis/shared-types';
+import type { StreamEvent, MCPServerConfig } from '@project-jarvis/shared-types';
 
 // Services
 import { OrchestratorService } from '../../../application/services/OrchestratorService.js';
 import { TaskPlanService } from '../../../application/services/TaskPlanService.js';
 import { SubAgentManager } from '../../../application/services/SubAgentManager.js';
 import { LoopDetectionService } from '../../../application/services/LoopDetectionService.js';
+import { ContextManagementService } from '../../../application/services/ContextManagementService.js';
+import { TokenCounterService } from '../../../application/services/TokenCounterService.js';
+import {
+  ToolRegistry,
+  registerBuiltInTools,
+} from '../../../application/services/ToolRegistry.js';
+import { registerMemoryTools, registerKnowledgeGraphTools } from '../../../application/services/MemoryTools.js';
+import { registerWebTools } from '../../../application/services/WebTools.js';
 
 // Adapters
 import {
@@ -28,9 +36,17 @@ import {
   OrchestratorEventStreamAdapter,
   createHonoSSEWriter,
 } from '../../../adapters/orchestrator/OrchestratorEventStreamAdapter.js';
+import { InMemoryMemoryStore } from '../../../adapters/memory/InMemoryMemoryStore.js';
+import { InMemoryKnowledgeGraph } from '../../../adapters/kg/InMemoryKnowledgeGraph.js';
+import { VercelEmbeddingAdapter } from '../../../adapters/embedding/VercelEmbeddingAdapter.js';
+
+// MCP Integration
+import { MCPClientManager, type MCPConfigLoader } from '../../../adapters/mcp/MCPClientManager.js';
+import { CompositeToolInvoker } from '../../../adapters/tools/CompositeToolInvoker.js';
 
 // LLM and Tools
 import { llmRouter } from '../../../application/services/LLMRouterService.js';
+import { logger } from '../../../infrastructure/logging/logger.js';
 
 // =============================================================================
 // Request Schemas
@@ -57,157 +73,131 @@ const stateRepository = new InMemoryOrchestratorStateRepository();
 const cacheAdapter = new InMemoryOrchestratorCacheAdapter();
 const eventStreamAdapter = new OrchestratorEventStreamAdapter(cacheAdapter);
 
+// Create embedding adapter for memory and KG
+const embeddingAdapter = new VercelEmbeddingAdapter();
+
+// Create real memory store and knowledge graph
+const memoryStore = new InMemoryMemoryStore(embeddingAdapter);
+const knowledgeGraph = new InMemoryKnowledgeGraph(embeddingAdapter);
+
+// Create tool registry with all tools registered
+const toolRegistry = new ToolRegistry();
+
 // =============================================================================
-// Mock Tool Invoker (for MVP - replace with real implementation)
+// MCP Client Manager Setup
 // =============================================================================
 
-import type { ToolInvokerPort } from '../../../ports/ToolInvokerPort.js';
-import type { ToolDefinition, ToolResult } from '@project-jarvis/shared-types';
+// Environment-based MCP configuration loader (for MVP)
+// In production, this would load from database via MCPServerService
+class EnvMCPConfigLoader implements MCPConfigLoader {
+  async loadConfigurations(): Promise<MCPServerConfig[]> {
+    const configs: MCPServerConfig[] = [];
 
-class MockToolInvoker implements ToolInvokerPort {
-  private tools: ToolDefinition[] = [
-    {
-      id: 'get_current_time',
-      name: 'get_current_time',
-      description: 'Get the current date and time',
-      parameters: {
-        type: 'object',
-        properties: {
-          timezone: { type: 'string', description: 'Timezone (e.g., "America/New_York", "UTC")' },
-        },
-      },
-    },
-    {
-      id: 'calculate',
-      name: 'calculate',
-      description: 'Perform mathematical calculations',
-      parameters: {
-        type: 'object',
-        properties: {
-          expression: { type: 'string', description: 'Mathematical expression to evaluate' },
-        },
-        required: ['expression'],
-      },
-    },
-    {
-      id: 'recall',
-      name: 'recall',
-      description: 'Search memories for relevant information',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'What to search for in memories' },
-          limit: { type: 'number', description: 'Maximum number of memories to return' },
-        },
-        required: ['query'],
-      },
-    },
-  ];
+    // Load MCP servers from environment variables
+    // Format: MCP_SERVER_<N>_URL, MCP_SERVER_<N>_NAME, MCP_SERVER_<N>_TRANSPORT
+    // Example:
+    //   MCP_SERVER_1_URL=http://localhost:3001/mcp
+    //   MCP_SERVER_1_NAME=local-tools
+    //   MCP_SERVER_1_TRANSPORT=streamable-http
 
-  async getTools(userId: string): Promise<ToolDefinition[]> {
-    return this.tools;
-  }
+    for (let i = 1; i <= 10; i++) {
+      const url = process.env[`MCP_SERVER_${i}_URL`];
+      const name = process.env[`MCP_SERVER_${i}_NAME`] || `mcp-server-${i}`;
+      const transport = (process.env[`MCP_SERVER_${i}_TRANSPORT`] || 'streamable-http') as
+        | 'streamable-http'
+        | 'sse';
+      const apiKey = process.env[`MCP_SERVER_${i}_API_KEY`];
 
-  async invoke(userId: string, toolId: string, input: Record<string, unknown>): Promise<ToolResult> {
-    switch (toolId) {
-      case 'get_current_time': {
-        const tz = (input.timezone as string) || 'UTC';
-        return {
-          success: true,
-          output: {
-            datetime: new Date().toLocaleString('en-US', { timeZone: tz }),
-            timezone: tz,
-            timestamp: Date.now(),
-          },
-        };
+      if (url) {
+        configs.push({
+          id: `env-mcp-${i}`,
+          name,
+          url,
+          transport,
+          authType: apiKey ? 'api-key' : 'none',
+          authConfig: apiKey
+            ? {
+                type: 'api-key',
+                apiKey: {
+                  apiKey,
+                  headerName: 'Authorization',
+                  headerPrefix: 'Bearer',
+                },
+              }
+            : { type: 'none' },
+          enabled: true,
+          priority: i,
+          connectionTimeoutMs: 30000,
+          requestTimeoutMs: 60000,
+          maxRetries: 3,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
       }
-      case 'calculate': {
-        try {
-          const expr = input.expression as string;
-          // Safe evaluation using Function constructor with limited scope
-          const safeEval = new Function(
-            'Math',
-            `return ${expr.replace(/[^0-9+\-*/().sqrt,pow,sin,cos,tan,log,abs,floor,ceil,round\s]/g, '')}`
-          );
-          const result = safeEval(Math);
-          return { success: true, output: { expression: expr, result } };
-        } catch (error) {
-          return { success: false, output: null, error: 'Invalid expression' };
-        }
-      }
-      case 'recall': {
-        // Mock memory recall - returns empty for now
-        return {
-          success: true,
-          output: { found: 0, memories: [] },
-        };
-      }
-      default:
-        return { success: false, output: null, error: `Unknown tool: ${toolId}` };
     }
-  }
 
-  async hasPermission(userId: string, toolId: string): Promise<boolean> {
-    return this.tools.some(t => t.id === toolId);
+    return configs;
   }
 }
 
-const mockToolInvoker = new MockToolInvoker();
+// Create MCP client manager (will be null if no MCP servers configured)
+let mcpClientManager: MCPClientManager | null = null;
+let compositeToolInvoker: CompositeToolInvoker | null = null;
 
-// =============================================================================
-// Mock Memory Store (for MVP - replace with real implementation)
-// =============================================================================
+// Register all tools and initialize MCP
+async function initializeToolRegistry(): Promise<void> {
+  const log = logger.child({ module: 'orchestrator.init' });
+  log.info('Initializing tool registry');
 
-import type { MemoryStorePort } from '../../../ports/MemoryStorePort.js';
-import type { MemoryItem, MemorySearchResult } from '@project-jarvis/shared-types';
+  // Built-in tools (get_current_time, calculate)
+  registerBuiltInTools(toolRegistry);
 
-class MockMemoryStore implements MemoryStorePort {
-  private memories: Map<string, MemoryItem> = new Map();
+  // Memory tools (remember, recall)
+  registerMemoryTools(toolRegistry, memoryStore);
 
-  async store(userId: string, content: string, metadata?: Record<string, unknown>): Promise<MemoryItem> {
-    const item: MemoryItem = {
-      id: uuidv4(),
-      userId,
-      content,
-      embedding: [], // Would be real embeddings in production
-      metadata: metadata || {},
-      createdAt: new Date(),
-    };
-    this.memories.set(item.id, item);
-    return item;
-  }
+  // Knowledge graph tools (kg_create_entity, kg_create_relation, kg_query, kg_get_entity)
+  registerKnowledgeGraphTools(toolRegistry, knowledgeGraph);
 
-  async search(userId: string, query: string, limit?: number): Promise<MemorySearchResult[]> {
-    // Mock search - returns recent memories for the user
-    const userMemories = Array.from(this.memories.values())
-      .filter(m => m.userId === userId)
-      .slice(0, limit || 5)
-      .map(m => ({
-        id: m.id,
-        content: m.content,
-        metadata: m.metadata,
-        similarity: 0.8, // Mock similarity
-        createdAt: m.createdAt,
-      }));
-    return userMemories;
-  }
+  // Web tools (web_search, web_fetch)
+  registerWebTools(toolRegistry);
 
-  async getRecent(userId: string, limit?: number): Promise<MemoryItem[]> {
-    return Array.from(this.memories.values())
-      .filter(m => m.userId === userId)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, limit || 10);
-  }
+  log.info('Local tool registry initialized', {
+    toolCount: toolRegistry.getRegisteredToolIds().length,
+    tools: toolRegistry.getRegisteredToolIds(),
+  });
 
-  async delete(userId: string, memoryId: string): Promise<void> {
-    const memory = this.memories.get(memoryId);
-    if (memory && memory.userId === userId) {
-      this.memories.delete(memoryId);
+  // Initialize MCP client manager
+  try {
+    const configLoader = new EnvMCPConfigLoader();
+    const configs = await configLoader.loadConfigurations();
+
+    if (configs.length > 0) {
+      log.info('Initializing MCP client manager', { serverCount: configs.length });
+
+      mcpClientManager = new MCPClientManager(configLoader);
+      await mcpClientManager.initialize();
+
+      log.info('MCP client manager initialized', {
+        servers: mcpClientManager.getServerIds(),
+      });
+    } else {
+      log.info('No MCP servers configured, skipping MCP initialization');
     }
+  } catch (error) {
+    log.warn('Failed to initialize MCP client manager', error as Record<string, unknown>);
+    // Continue without MCP - graceful degradation
+    mcpClientManager = null;
   }
+
+  // Create composite tool invoker
+  compositeToolInvoker = new CompositeToolInvoker(toolRegistry, mcpClientManager);
+  log.info('Composite tool invoker created');
 }
 
-const mockMemoryStore = new MockMemoryStore();
+// Initialize on module load
+initializeToolRegistry().catch((error) => {
+  logger.error('Failed to initialize tool registry', error as Record<string, unknown>);
+});
 
 // =============================================================================
 // Service Factory
@@ -216,26 +206,52 @@ const mockMemoryStore = new MockMemoryStore();
 function createOrchestratorService(onEvent: (event: StreamEvent) => void): OrchestratorService {
   const llm = llmRouter.getPowerfulProvider();
   
+  // Create context management service for automatic summarization
+  const tokenCounter = new TokenCounterService();
+  const summaryLLM = llmRouter.getProvider('fast'); // Use fast model for summarization
+  const contextManager = new ContextManagementService(tokenCounter, summaryLLM);
+  
   const planService = new TaskPlanService(stateRepository, cacheAdapter);
   const loopDetection = new LoopDetectionService(cacheAdapter, stateRepository);
+
+  // Use composite tool invoker if available (includes MCP tools)
+  // Falls back to local tool registry if MCP not initialized yet
+  const toolInvoker = compositeToolInvoker || toolRegistry;
+
   const agentManager = new SubAgentManager(
     llm,
-    mockToolInvoker,
+    toolInvoker,
     stateRepository,
-    cacheAdapter
+    cacheAdapter,
+    contextManager
   );
 
   return new OrchestratorService(
     llm,
-    mockToolInvoker,
-    mockMemoryStore,
+    toolInvoker,
+    memoryStore,
     stateRepository,
     cacheAdapter,
     planService,
     agentManager,
     loopDetection,
+    contextManager,
     { onEvent }
   );
+}
+
+/**
+ * Get the MCP client manager (for use by MCP routes)
+ */
+export function getMCPClientManager(): MCPClientManager | null {
+  return mcpClientManager;
+}
+
+/**
+ * Get the tool registry (for use by MCP routes)
+ */
+export function getToolRegistry(): ToolRegistry {
+  return toolRegistry;
 }
 
 // =============================================================================
@@ -260,6 +276,9 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
   const userId = 'anonymous';
   const runId = uuidv4();
 
+  const log = logger.child({ runId, userId });
+  log.info('Starting orchestrator run', { inputPreview: input.slice(0, 100) });
+
   // Return SSE stream
   return streamSSE(c, async (stream) => {
     const writer = createHonoSSEWriter(stream);
@@ -268,32 +287,47 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
     try {
       const orchestrator = createOrchestratorService((event) => {
         // Events are already published via the adapter, but we can log here
-        console.log(`[Run ${runId}] Event: ${event.type}`);
+        log.debug('Event emitted', { eventType: event.type });
       });
 
+      log.debug('Orchestrator service created, executing run');
       const result = await orchestrator.executeRun(userId as string, runId, input);
 
-      // Send completion event
+      log.info('Orchestrator run completed', {
+        success: result.success,
+        totalTokens: result.totalTokens,
+        error: result.error,
+        responsePreview: result.response?.slice(0, 100),
+      });
+
+      // Send completion event with the response
       await stream.writeSSE({
         event: 'orchestrator.complete',
         data: JSON.stringify({
           success: result.success,
+          response: result.response,
           totalTokens: result.totalTokens,
           totalCost: result.totalCost,
           tasksCompleted: result.tasksCompleted,
           tasksFailed: result.tasksFailed,
+          error: result.error,
         }),
       });
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[Run ${runId}] Error:`, error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      log.error('Orchestrator run failed with exception', error, { 
+        errorMessage,
+      });
 
       await stream.writeSSE({
         event: 'agent.error',
         data: JSON.stringify({
           message: errorMessage,
           code: 'ORCHESTRATOR_ERROR',
+          stack: process.env.NODE_ENV === 'development' ? errorStack : undefined,
         }),
       });
     } finally {

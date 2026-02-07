@@ -88,3 +88,77 @@ export function getEmbeddingDimension(modelId: string): number {
   const modelName = modelId.includes(':') ? modelId.split(':')[1] : modelId;
   return EMBEDDING_DIMENSIONS[modelName] ?? 1536;
 }
+
+// =============================================================================
+// Context Window Limits
+// =============================================================================
+
+/**
+ * Context window limits per model (in tokens)
+ * These represent the maximum input + output tokens a model can handle
+ */
+export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
+  // OpenAI models
+  'gpt-4o-mini': 128000,
+  'gpt-4o': 128000,
+  'gpt-4-turbo': 128000,
+  'gpt-4.1': 128000,
+  'gpt-4.1-mini': 128000,
+  'gpt-4.1-nano': 128000,
+  'gpt-5-nano': 128000,
+  'gpt-5-mini': 128000,
+  'gpt-5.2': 128000,
+  // Anthropic models
+  'claude-sonnet-4-20250514': 200000,
+  'claude-haiku-3-5-20241022': 200000,
+  'claude-opus-4-20250514': 200000,
+};
+
+/**
+ * Default context limit for unknown models
+ */
+export const DEFAULT_CONTEXT_LIMIT = 128000;
+
+/**
+ * Get context limit for a model
+ * @param modelId - The model ID (with or without provider prefix)
+ * @returns Context limit in tokens
+ */
+export function getModelContextLimit(modelId: string): number {
+  const modelName = modelId.includes(':') ? modelId.split(':')[1] : modelId;
+  return MODEL_CONTEXT_LIMITS[modelName] ?? DEFAULT_CONTEXT_LIMIT;
+}
+
+// =============================================================================
+// Context Summarization Configuration
+// =============================================================================
+
+/**
+ * Configuration for automatic context summarization
+ */
+export interface ContextSummarizationConfig {
+  /** Enable/disable automatic context summarization */
+  enabled: boolean;
+  /** Percentage of context limit that triggers summarization (0-1) */
+  triggerThreshold: number;
+  /** Target percentage after summarization (0-1) */
+  targetThreshold: number;
+  /** Model to use for summarization (should be fast/cheap) */
+  summaryModel: string;
+  /** Minimum number of recent messages to always keep */
+  minMessagesToKeep: number;
+  /** Reserve tokens for output generation */
+  outputReserve: number;
+}
+
+/**
+ * Default context summarization settings
+ */
+export const DEFAULT_CONTEXT_SUMMARIZATION_CONFIG: ContextSummarizationConfig = {
+  enabled: true,
+  triggerThreshold: 0.8, // Trigger at 80% of context limit
+  targetThreshold: 0.5, // Target 50% after summarization
+  summaryModel: 'openai:gpt-5-nano',
+  minMessagesToKeep: 4, // Always keep last 4 messages
+  outputReserve: 4096, // Reserve tokens for output
+};

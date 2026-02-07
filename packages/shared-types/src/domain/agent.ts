@@ -146,6 +146,9 @@ export const ToolParameterSchema: z.ZodType<ToolParameter> = z.lazy(() =>
     description: z.string().optional(),
     enum: z.array(z.string()).optional(),
     items: ToolParameterSchema.optional(),
+    // For object types - nested properties
+    properties: z.record(z.string(), ToolParameterSchema).optional(),
+    required: z.array(z.string()).optional(),
   })
 );
 
@@ -154,6 +157,9 @@ export interface ToolParameter {
   description?: string;
   enum?: string[];
   items?: ToolParameter;
+  // For object types - nested properties
+  properties?: Record<string, ToolParameter>;
+  required?: string[];
 }
 
 // =============================================================================
@@ -192,3 +198,51 @@ export const ToolResultSchema = z.object({
 });
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;
+
+// =============================================================================
+// Context Summary (for context management)
+// =============================================================================
+
+/**
+ * Represents a summary of conversation history created when context
+ * approaches the model's limit. Used by the context management system
+ * to compress older messages while preserving important information.
+ */
+export const ContextSummarySchema = z.object({
+  /** Unique identifier for the summary */
+  id: z.string().uuid(),
+  /** The summarized content */
+  content: z.string(),
+  /** Number of messages that were summarized */
+  summarizedMessageCount: z.number().int().nonnegative(),
+  /** Original token count of summarized messages */
+  originalTokenCount: z.number().int().nonnegative(),
+  /** Token count of the summary itself */
+  summaryTokenCount: z.number().int().nonnegative(),
+  /** When the summary was created */
+  createdAt: z.date(),
+});
+
+export type ContextSummary = z.infer<typeof ContextSummarySchema>;
+
+// =============================================================================
+// Context Management Result
+// =============================================================================
+
+/**
+ * Result of context management operation
+ */
+export const ContextManagementResultSchema = z.object({
+  /** The (potentially modified) messages to send to LLM */
+  messages: z.array(LLMMessageSchema),
+  /** Whether summarization was applied */
+  summarized: z.boolean(),
+  /** The summary that was created (if any) */
+  summary: ContextSummarySchema.optional(),
+  /** Current estimated token count */
+  estimatedTokens: z.number().int().nonnegative(),
+  /** Context limit for the model */
+  contextLimit: z.number().int().positive(),
+});
+
+export type ContextManagementResult = z.infer<typeof ContextManagementResultSchema>;
