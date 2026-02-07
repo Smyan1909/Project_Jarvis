@@ -8,7 +8,9 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { healthRoutes } from './routes/health.js';
 import { chatRoutes } from './routes/chat.js';
-import { orchestratorRoutes } from './routes/orchestrator.js';
+import { orchestratorRoutes, getMCPClientManager, getToolRegistry } from './routes/orchestrator.js';
+import { createMCPRoutes, createMCPToolsRoutes } from './routes/mcp.js';
+import { MCPServerService } from '../../application/services/MCPServerService.js';
 import type { AuthVariables } from './middleware/auth.js';
 
 // =============================================================================
@@ -65,6 +67,34 @@ app.route('/health', healthRoutes);
 // API v1 routes
 app.route('/api/v1/chat', chatRoutes);
 app.route('/api/v1/orchestrator', orchestratorRoutes);
+
+// MCP tools debug routes - simple direct implementation
+app.get('/api/v1/mcp/tools', async (c) => {
+  const mcpClientManager = getMCPClientManager();
+  
+  if (!mcpClientManager) {
+    return c.json({ error: 'MCP client manager not available', tools: [] });
+  }
+
+  try {
+    const tools = await mcpClientManager.getToolDefinitions();
+    return c.json({ tools, count: tools.length });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return c.json({ error: errorMessage, tools: [] }, 500);
+  }
+});
+
+app.get('/api/v1/mcp/status', async (c) => {
+  const mcpClientManager = getMCPClientManager();
+  
+  if (!mcpClientManager) {
+    return c.json({ error: 'MCP client manager not available', servers: [] });
+  }
+
+  const servers = mcpClientManager.getAllServerStatus();
+  return c.json({ servers });
+});
 
 // =============================================================================
 // Root Route

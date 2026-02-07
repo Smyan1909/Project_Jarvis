@@ -28,6 +28,7 @@ import type { IOrchestratorCacheAdapter } from '../../adapters/orchestrator/Orch
 import { TaskPlanService, type TaskPlanInput } from './TaskPlanService.js';
 import { SubAgentManager, type AgentHandle } from './SubAgentManager.js';
 import { LoopDetectionService } from './LoopDetectionService.js';
+import type { ContextManagementService } from './ContextManagementService.js';
 import {
   ORCHESTRATOR_TOOLS,
   ORCHESTRATOR_ONLY_TOOL_IDS,
@@ -81,6 +82,7 @@ export class OrchestratorService {
     private planService: TaskPlanService,
     private agentManager: SubAgentManager,
     private loopDetection: LoopDetectionService,
+    private contextManager?: ContextManagementService,
     config: OrchestratorConfig = {}
   ) {
     this.maxIterations = config.maxIterations ?? 50;
@@ -229,6 +231,38 @@ export class OrchestratorService {
       // Check for active agents that have completed
       await this.checkCompletedAgents(runId, activeAgents);
 
+      // Manage context before LLM call (automatic summarization if needed)
+      let messagesToSend = messages;
+      if (this.contextManager) {
+        const contextResult = await this.contextManager.manageContext(
+          messages,
+          {
+            modelId: this.llm.getModel(),
+            systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+            tools,
+          }
+        );
+
+        if (contextResult.summarized && contextResult.summary) {
+          // Replace messages array with summarized version
+          messages.length = 0;
+          messages.push(...contextResult.messages);
+          messagesToSend = messages;
+
+          log.info('Context summarized', {
+            summarizedMessages: contextResult.summary.summarizedMessageCount,
+            originalTokens: contextResult.summary.originalTokenCount,
+            newTokens: contextResult.summary.summaryTokenCount,
+          });
+
+          await this.emitEvent({
+            type: 'orchestrator.status',
+            status: 'executing',
+            message: 'Context summarized to fit within limits',
+          });
+        }
+      }
+
       // Stream LLM response
       let content = '';
       const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
@@ -239,7 +273,7 @@ export class OrchestratorService {
           toolCount: tools.length,
         });
         
-        for await (const chunk of this.llm.stream(messages, {
+        for await (const chunk of this.llm.stream(messagesToSend, {
           systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
           tools,
           temperature: 0.7,

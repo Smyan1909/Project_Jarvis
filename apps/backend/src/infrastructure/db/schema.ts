@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, varchar, integer, jsonb, real, customType } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, varchar, integer, jsonb, real, customType, boolean } from 'drizzle-orm/pg-core';
 
 // Custom pgvector type
 const vector = customType<{ data: number[]; driverData: string }>({
@@ -104,4 +104,27 @@ export const kgRelations = pgTable('kg_relations', {
     type: varchar('type', { length: 100 }).notNull(),
     properties: jsonb('properties').default({}),
     createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// === MCP Domain ===
+// Global MCP server configurations (admin-managed)
+export const mcpServers = pgTable('mcp_servers', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    description: text('description'),
+    url: varchar('url', { length: 2048 }).notNull(),
+    transport: varchar('transport', { length: 50 }).notNull().default('streamable-http'), // 'streamable-http' | 'sse'
+    authType: varchar('auth_type', { length: 50 }).notNull().default('none'), // 'oauth' | 'api-key' | 'none'
+    // Encrypted auth configuration (OAuth tokens, API keys, etc.)
+    // Structure varies based on authType - see MCPAuthConfig in shared-types
+    authConfig: jsonb('auth_config'),
+    enabled: boolean('enabled').notNull().default(true),
+    priority: integer('priority').notNull().default(0), // Higher = higher priority for tool conflicts
+    // Timeouts and retry configuration
+    connectionTimeoutMs: integer('connection_timeout_ms').notNull().default(30000),
+    requestTimeoutMs: integer('request_timeout_ms').notNull().default(60000),
+    maxRetries: integer('max_retries').notNull().default(3),
+    // Timestamps
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
