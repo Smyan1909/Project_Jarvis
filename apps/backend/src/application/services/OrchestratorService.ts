@@ -214,8 +214,27 @@ export class OrchestratorService {
       return result;
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      let errorMessage = error instanceof Error ? error.message : String(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      // Check for the specific "tool message without tool_calls" error from OpenAI
+      // This indicates corrupted conversation history
+      const isToolMessageError = errorMessage.includes("role 'tool' must be a response to a preceeding message with 'tool_calls'");
+      if (isToolMessageError) {
+        log.error('Corrupted conversation history detected', { userId, runId });
+        
+        // Try to clear conversation history automatically to recover
+        if (this.conversationHistory) {
+          try {
+            await this.conversationHistory.clearHistory(userId);
+            log.info('Cleared corrupted conversation history', { userId });
+            errorMessage = 'Conversation history was corrupted and has been cleared. Please try your request again.';
+          } catch (clearError) {
+            log.warn('Failed to clear conversation history', { userId, error: clearError });
+            errorMessage = 'Conversation history is corrupted. Please clear it manually via DELETE /api/v1/orchestrator/conversation/history';
+          }
+        }
+      }
       
       log.error('executeRun failed', error, { 
         errorMessage,
@@ -231,7 +250,7 @@ export class OrchestratorService {
       await this.emitEvent({
         type: 'agent.error',
         message: errorMessage,
-        code: 'ORCHESTRATOR_ERROR',
+        code: isToolMessageError ? 'CORRUPTED_HISTORY' : 'ORCHESTRATOR_ERROR',
       });
 
       // Cancel any running agents
