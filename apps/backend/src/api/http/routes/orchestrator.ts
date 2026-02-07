@@ -27,18 +27,19 @@ import { registerWebTools } from '../../../application/services/WebTools.js';
 
 // Adapters
 import {
-  InMemoryOrchestratorStateRepository,
-} from '../../../adapters/orchestrator/OrchestratorStateRepository.js';
-import {
   InMemoryOrchestratorCacheAdapter,
 } from '../../../adapters/orchestrator/OrchestratorCacheAdapter.js';
 import {
   OrchestratorEventStreamAdapter,
   createHonoSSEWriter,
 } from '../../../adapters/orchestrator/OrchestratorEventStreamAdapter.js';
-import { InMemoryMemoryStore } from '../../../adapters/memory/InMemoryMemoryStore.js';
-import { InMemoryKnowledgeGraph } from '../../../adapters/kg/InMemoryKnowledgeGraph.js';
-import { VercelEmbeddingAdapter } from '../../../adapters/embedding/VercelEmbeddingAdapter.js';
+
+// PostgreSQL-backed services from central service registry
+import {
+  memoryStore,
+  knowledgeGraph,
+  orchestratorStateRepository,
+} from '../../../services/index.js';
 
 // MCP Integration
 import { MCPClientManager, type MCPConfigLoader } from '../../../adapters/mcp/MCPClientManager.js';
@@ -67,18 +68,16 @@ const runStatusSchema = z.object({
 // Singleton Instances (for MVP - replace with DI in production)
 // =============================================================================
 
-// Create singleton instances for MVP
-// In production, these would be injected via a DI container
-const stateRepository = new InMemoryOrchestratorStateRepository();
+// PostgreSQL-backed state repository (imported from services)
+const stateRepository = orchestratorStateRepository;
+
+// In-memory cache adapter (can be replaced with Redis in production)
 const cacheAdapter = new InMemoryOrchestratorCacheAdapter();
 const eventStreamAdapter = new OrchestratorEventStreamAdapter(cacheAdapter);
 
-// Create embedding adapter for memory and KG
-const embeddingAdapter = new VercelEmbeddingAdapter();
-
-// Create real memory store and knowledge graph
-const memoryStore = new InMemoryMemoryStore(embeddingAdapter);
-const knowledgeGraph = new InMemoryKnowledgeGraph(embeddingAdapter);
+// Memory store and knowledge graph are PostgreSQL-backed (imported from services)
+// - memoryStore: PgMemoryStore with pgvector for semantic search
+// - knowledgeGraph: PgKnowledgeGraph with pgvector for semantic search
 
 // Create tool registry with all tools registered
 const toolRegistry = new ToolRegistry();
