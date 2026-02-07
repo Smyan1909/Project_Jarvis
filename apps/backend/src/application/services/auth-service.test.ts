@@ -225,7 +225,7 @@ describe('AuthService', () => {
       expect(result.tokens.expiresIn).toBeDefined();
 
       // Should not expose password hash
-      expect((result.user as Record<string, unknown>).passwordHash).toBeUndefined();
+      expect((result.user as unknown as Record<string, unknown>).passwordHash).toBeUndefined();
     });
 
     it('should throw error if email already exists', async () => {
@@ -459,7 +459,7 @@ describe('AuthService', () => {
       expect(user).toBeDefined();
       expect(user!.id).toBe(mockUser.id);
       expect(user!.email).toBe(mockUser.email);
-      expect((user as Record<string, unknown>).passwordHash).toBeUndefined();
+      expect((user as unknown as Record<string, unknown>).passwordHash).toBeUndefined();
     });
 
     it('should return null for non-existent user', async () => {

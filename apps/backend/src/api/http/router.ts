@@ -6,9 +6,12 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { HTTPException } from 'hono/http-exception';
 import { healthRoutes } from './routes/health.js';
 import { chatRoutes } from './routes/chat.js';
 import { orchestratorRoutes } from './routes/orchestrator.js';
+import { authRoutes } from './routes/auth.js';
+import { AppError } from '../../domain/errors/index.js';
 import type { AuthVariables } from './middleware/auth.js';
 
 // =============================================================================
@@ -63,6 +66,7 @@ app.use('*', logger());
 app.route('/health', healthRoutes);
 
 // API v1 routes
+app.route('/api/v1/auth', authRoutes);
 app.route('/api/v1/chat', chatRoutes);
 app.route('/api/v1/orchestrator', orchestratorRoutes);
 
@@ -89,9 +93,10 @@ app.get('/', (c) => {
 app.notFound((c) => {
   return c.json(
     {
-      error: 'Not Found',
-      message: `Route ${c.req.method} ${c.req.path} not found`,
-      status: 404,
+      error: {
+        code: 'NOT_FOUND',
+        message: `Route ${c.req.method} ${c.req.path} not found`,
+      },
     },
     404
   );
@@ -99,8 +104,28 @@ app.notFound((c) => {
 
 /**
  * Global error handler
+ * Handles AppError instances with proper status codes and formats
  */
 app.onError((err, c) => {
+  // Handle AppError instances (our domain errors)
+  if (err instanceof AppError) {
+    return c.json(err.toJSON(), err.statusCode as 400 | 401 | 403 | 404 | 409 | 429 | 500 | 502 | 503);
+  }
+
+  // Handle Hono's HTTPException
+  if (err instanceof HTTPException) {
+    return c.json(
+      {
+        error: {
+          code: 'HTTP_ERROR',
+          message: err.message,
+        },
+      },
+      err.status
+    );
+  }
+
+  // Log unexpected errors
   console.error('[Unhandled Error]', err);
 
   // Don't leak internal error details in production
@@ -108,10 +133,11 @@ app.onError((err, c) => {
 
   return c.json(
     {
-      error: 'Internal Server Error',
-      message: isDev ? err.message : 'An unexpected error occurred',
-      ...(isDev && { stack: err.stack }),
-      status: 500,
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: isDev ? err.message : 'An unexpected error occurred',
+        ...(isDev && { stack: err.stack }),
+      },
     },
     500
   );
