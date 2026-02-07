@@ -13,7 +13,7 @@ You are responsible for the **infrastructure layer** of Project Jarvis:
 
 ## Implementation Status
 
-> **Last Updated:** February 7, 2026 (Updated: Auth system marked as complete)
+> **Last Updated:** February 7, 2026 (Updated: OpenTelemetry tracing implemented)
 
 ### Completed
 
@@ -484,6 +484,52 @@ apps/backend/src/
 - Set up OpenTelemetry tracing
 - PII redaction
 
+### Status: PARTIAL (OpenTelemetry Complete)
+
+### OpenTelemetry Tracing
+
+**Status: DONE**
+
+Full distributed tracing implementation with:
+
+**Core Infrastructure:**
+- `apps/backend/src/infrastructure/observability/tracing.ts` - SDK initialization
+- `apps/backend/src/infrastructure/observability/hono-tracing.ts` - HTTP middleware
+- `apps/backend/src/infrastructure/observability/index.ts` - Public exports
+
+**Features:**
+- Console span exporter (default) with optional OTLP export
+- Auto-instrumentation for HTTP and PostgreSQL
+- Custom spans for LLM calls (`VercelAIAdapter`)
+- Custom spans for MCP tool invocations (`MCPClientAdapter`)
+- Custom spans for orchestrator runs (`OrchestratorService`)
+- Trace context in logs (`logger.ts` includes `trace_id` and `span_id`)
+- W3C Trace Context propagation
+- `x-trace-id` response header for client correlation
+
+**Configuration (via environment variables):**
+- `OTEL_ENABLED` - Enable/disable tracing (default: true)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP endpoint (if not set, uses console)
+- `OTEL_SERVICE_NAME` - Service name (default: project-jarvis-backend)
+- `OTEL_SERVICE_VERSION` - Service version (default: 1.0.0)
+- `OTEL_DEBUG` - Enable debug logging (default: false)
+
+**Dependencies Added:**
+- @opentelemetry/api
+- @opentelemetry/sdk-node
+- @opentelemetry/sdk-trace-node
+- @opentelemetry/resources
+- @opentelemetry/semantic-conventions
+- @opentelemetry/instrumentation-http
+- @opentelemetry/instrumentation-pg
+- @opentelemetry/exporter-trace-otlp-http
+
+### Row-Level Security
+
+**Status: NOT STARTED**
+
+### PII Redaction
+
 **Status: NOT STARTED**
 
 ---
@@ -524,6 +570,13 @@ The orchestrator is fully functional. Most in-memory adapters have been replaced
    - Refresh token rotation with SHA-256 hashed storage
    - Real JWT validation in auth middleware
    - 24 passing integration tests
+
+7. **~~OpenTelemetry Tracing~~** **DONE**
+   - Full SDK setup with console/OTLP export
+   - HTTP request tracing via Hono middleware
+   - PostgreSQL query auto-instrumentation
+   - Custom spans for LLM calls, MCP tools, orchestrator runs
+   - Log correlation with trace_id and span_id
 
 ### High Priority (Remaining)
 

@@ -37,6 +37,13 @@ import {
 } from '../../domain/orchestrator/OrchestratorTools.js';
 import { ORCHESTRATOR_SYSTEM_PROMPT } from '../../domain/orchestrator/prompts.js';
 import { logger } from '../../infrastructure/logging/logger.js';
+import { createTracer, SpanKind, SpanStatusCode } from '../../infrastructure/observability/index.js';
+
+// =============================================================================
+// Tracing
+// =============================================================================
+
+const tracer = createTracer('orchestrator', '1.0.0');
 
 // =============================================================================
 // Orchestrator Configuration
@@ -109,6 +116,17 @@ export class OrchestratorService {
     runId: string,
     input: string
   ): Promise<OrchestratorRunResult> {
+    return tracer.startActiveSpan(
+      'orchestrator.run',
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          'jarvis.run_id': runId,
+          'jarvis.user_id': userId,
+          'jarvis.input_length': input.length,
+        },
+      },
+      async (span) => {
     const log = logger.child({ runId, userId, service: 'OrchestratorService' });
     log.info('executeRun started', { inputLength: input.length });
 
@@ -211,6 +229,18 @@ export class OrchestratorService {
         totalTokens: result.totalTokens,
         success: result.success,
       });
+
+      // Record success metrics in span
+      span.setAttributes({
+        'jarvis.success': result.success,
+        'jarvis.total_tokens': result.totalTokens,
+        'jarvis.total_cost': result.totalCost,
+        'jarvis.tasks_completed': result.tasksCompleted,
+        'jarvis.tasks_failed': result.tasksFailed,
+        'jarvis.plan_id': result.planId || '',
+      });
+      span.end();
+
       return result;
 
     } catch (error) {
@@ -237,6 +267,18 @@ export class OrchestratorService {
       // Cancel any running agents
       await this.agentManager.cancelAllAgents(runId, 'Orchestrator error');
 
+      // Record error in span
+      span.recordException(error as Error);
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: errorMessage,
+      });
+      span.setAttributes({
+        'jarvis.success': false,
+        'jarvis.error': errorMessage,
+      });
+      span.end();
+
       return {
         success: false,
         response: null,
@@ -248,6 +290,8 @@ export class OrchestratorService {
         tasksFailed: 0,
       };
     }
+      }
+    );
   }
 
   // ===========================================================================

@@ -28,6 +28,13 @@ const envSchema = z.object({
     // LLM (optional - can use user secrets)
     OPENAI_API_KEY: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
+
+    // OpenTelemetry (optional)
+    OTEL_ENABLED: z.enum(['true', 'false']).default('true'),
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+    OTEL_SERVICE_NAME: z.string().default('project-jarvis-backend'),
+    OTEL_SERVICE_VERSION: z.string().default('1.0.0'),
+    OTEL_DEBUG: z.enum(['true', 'false']).default('false'),
 });
 
 export type Env = z.infer<typeof envSchema>;

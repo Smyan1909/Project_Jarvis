@@ -18,6 +18,7 @@ import { toolPermissionsRoutes } from './routes/tool-permissions.js';
 import { usageRoutes } from './routes/usage.js';
 import { AppError } from '../../domain/errors/index.js';
 import type { AuthVariables } from './middleware/auth.js';
+import { tracingMiddleware } from '../../infrastructure/observability/index.js';
 
 // =============================================================================
 // App Type
@@ -44,6 +45,12 @@ export const app = new Hono<AppBindings>();
 // =============================================================================
 
 /**
+ * OpenTelemetry tracing middleware
+ * MUST be first to capture full request lifecycle
+ */
+app.use('*', tracingMiddleware);
+
+/**
  * CORS configuration
  * TODO: Restrict origins in production
  */
@@ -52,8 +59,8 @@ app.use(
   cors({
     origin: '*', // Configure appropriately for production
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
-    exposeHeaders: ['X-Request-ID'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'traceparent', 'tracestate'],
+    exposeHeaders: ['X-Request-ID', 'X-Trace-ID'],
     maxAge: 86400, // 24 hours
   })
 );
