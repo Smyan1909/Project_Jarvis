@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -33,7 +33,6 @@ export function ChatScreen() {
   const flatListRef = useRef<FlatList>(null);
   const speechPanelRef = useRef<SpeechPanelRef>(null);
   const insets = useSafeAreaInsets();
-  const lastSpokenMessageIdRef = useRef<string | null>(null);
 
   // Toggle speech panel
   const toggleSpeechPanel = useCallback(() => {
@@ -44,36 +43,24 @@ export function ChatScreen() {
     }
   }, []);
 
-  // Auto-play TTS when assistant message completes
-  useEffect(() => {
-    if (!ttsEnabled) return;
-
-    // Find the most recent completed assistant message
-    const lastAssistantMessage = [...messages]
-      .reverse()
-      .find(m => m.role === 'assistant' && !m.isStreaming && m.content);
-
-    if (
-      lastAssistantMessage &&
-      lastAssistantMessage.id !== lastSpokenMessageIdRef.current
-    ) {
-      lastSpokenMessageIdRef.current = lastAssistantMessage.id;
-      speak(lastAssistantMessage.content);
-    }
-  }, [messages, ttsEnabled, speak]);
-
-  // Stop TTS when user sends a new message
+  // Send message and trigger TTS immediately when response arrives
   const handleSend = async () => {
     const trimmedInput = input.trim();
     if (!trimmedInput || isLoading) return;
 
-    // Stop any ongoing TTS
+    // Stop any ongoing TTS before sending new message
     if (isSpeaking) {
       stopSpeaking();
     }
 
     setInput('');
-    await sendMessage(trimmedInput);
+    
+    // Pass TTS callback - will be called immediately when response is ready
+    await sendMessage(trimmedInput, (responseText) => {
+      if (ttsEnabled) {
+        speak(responseText);
+      }
+    });
   };
 
   const toggleTts = useCallback(() => {
@@ -205,7 +192,12 @@ export function ChatScreen() {
           styles.messagesContent,
           messages.length === 0 ? styles.emptyMessagesContent : undefined,
         ]}
-        inverted={messages.length > 0}
+        onContentSizeChange={() => {
+          // Auto-scroll to bottom when new messages arrive
+          if (messages.length > 0) {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }
+        }}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateTitle}>Welcome to Jarvis</Text>

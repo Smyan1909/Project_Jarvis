@@ -30,7 +30,7 @@ export const SPEECH_CONFIG = {
     apiKey: process.env.EXPO_PUBLIC_ELEVENLABS_API_KEY || '',
     // Default voice ID - get from ElevenLabs dashboard
     // Fallback to "Sarah" voice if not configured
-    defaultVoiceId: process.env.EXPO_PUBLIC_ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
+    defaultVoiceId: process.env.EXPO_PUBLIC_ELEVENLABS_VOICE_ID || 'JBFqnCBsd6RMkjVDRZzb',
     // TTS model to use
     model: 'eleven_multilingual_v2',
     // API endpoint (proxied through backend for security)

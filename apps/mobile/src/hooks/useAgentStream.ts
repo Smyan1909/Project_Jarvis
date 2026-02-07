@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { agentApi } from '../services/api';
 import { wsManager, AgentEvent } from '../services/websocket';
-import { streamMockResponse } from '../services/mockAgent';
+import { getMockResponse } from '../services/mockAgent';
 import { DEMO_MODE } from '../config';
 
 interface Message {
@@ -24,7 +24,7 @@ interface UseAgentStreamResult {
   messages: Message[];
   isLoading: boolean;
   error: string | null;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, onResponseReady?: (text: string) => void) => Promise<void>;
   cancelRun: () => void;
 }
 
@@ -34,7 +34,6 @@ export function useAgentStream(): UseAgentStreamResult {
   const [error, setError] = useState<string | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
   const streamingContentRef = useRef<string>('');
-  const cancelMockStreamRef = useRef<(() => void) | null>(null);
 
   // Connect WebSocket on mount (skip in demo mode)
   useEffect(() => {
@@ -43,10 +42,6 @@ export function useAgentStream(): UseAgentStreamResult {
     }
     return () => {
       // Don't disconnect on unmount - let it persist
-      // Cancel any mock stream on unmount
-      if (cancelMockStreamRef.current) {
-        cancelMockStreamRef.current();
-      }
     };
   }, []);
 
@@ -145,7 +140,7 @@ export function useAgentStream(): UseAgentStreamResult {
     }
   }, []);
 
-  const sendMessage = useCallback(async (content: string): Promise<void> => {
+  const sendMessage = useCallback(async (content: string, onResponseReady?: (text: string) => void): Promise<void> => {
     setError(null);
     setIsLoading(true);
     streamingContentRef.current = '';
@@ -158,7 +153,32 @@ export function useAgentStream(): UseAgentStreamResult {
     };
     setMessages(prev => [...prev, userMessage]);
 
-    // Add placeholder assistant message
+    // Demo mode: get full response immediately (no streaming)
+    if (DEMO_MODE) {
+      getMockResponse(content, {
+        onResponse: (fullContent) => {
+          // Add assistant message with full content immediately
+          const assistantMessage: Message = {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: fullContent,
+            isStreaming: false,
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setIsLoading(false);
+          
+          // Trigger TTS callback immediately with full response
+          onResponseReady?.(fullContent);
+        },
+        onError: (errorMessage) => {
+          setError(errorMessage);
+          setIsLoading(false);
+        },
+      });
+      return;
+    }
+
+    // Production mode: Add placeholder assistant message for streaming
     const assistantMessage: Message = {
       id: `assistant-${Date.now()}`,
       role: 'assistant',
@@ -166,45 +186,6 @@ export function useAgentStream(): UseAgentStreamResult {
       isStreaming: true,
     };
     setMessages(prev => [...prev, assistantMessage]);
-
-    // Demo mode: use mock streaming
-    if (DEMO_MODE) {
-      cancelMockStreamRef.current = streamMockResponse(content, {
-        onToken: (token) => {
-          streamingContentRef.current += token;
-          setMessages(prev => {
-            const lastMessage = prev[prev.length - 1];
-            if (lastMessage?.isStreaming) {
-              return [
-                ...prev.slice(0, -1),
-                { ...lastMessage, content: streamingContentRef.current },
-              ];
-            }
-            return prev;
-          });
-        },
-        onComplete: (fullContent) => {
-          setMessages(prev => {
-            const lastMessage = prev[prev.length - 1];
-            if (lastMessage?.isStreaming) {
-              return [
-                ...prev.slice(0, -1),
-                { ...lastMessage, content: fullContent, isStreaming: false },
-              ];
-            }
-            return prev;
-          });
-          setIsLoading(false);
-          cancelMockStreamRef.current = null;
-        },
-        onError: (errorMessage) => {
-          setError(errorMessage);
-          setIsLoading(false);
-          cancelMockStreamRef.current = null;
-        },
-      });
-      return;
-    }
 
     // Production mode: use real API and WebSocket
     try {
@@ -224,10 +205,15 @@ export function useAgentStream(): UseAgentStreamResult {
   }, [handleEvent]);
 
   const cancelRun = useCallback(() => {
-    // Demo mode: cancel mock stream
-    if (DEMO_MODE && cancelMockStreamRef.current) {
-      cancelMockStreamRef.current();
-      cancelMockStreamRef.current = null;
+    // Demo mode: just stop loading (response is instant, nothing to cancel)
+    if (DEMO_MODE) {
+      setIsLoading(false);
+      return;
+    }
+
+    // Production mode: cancel via API
+    if (currentRunIdRef.current) {
+      agentApi.cancelRun(currentRunIdRef.current).catch(console.error);
       setIsLoading(false);
       // Mark streaming message as complete
       setMessages(prev => {
@@ -240,13 +226,6 @@ export function useAgentStream(): UseAgentStreamResult {
         }
         return prev;
       });
-      return;
-    }
-
-    // Production mode: cancel via API
-    if (currentRunIdRef.current) {
-      agentApi.cancelRun(currentRunIdRef.current).catch(console.error);
-      setIsLoading(false);
     }
   }, []);
 

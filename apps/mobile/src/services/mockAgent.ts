@@ -115,58 +115,27 @@ function selectResponse(userMessage: string): string {
   return MOCK_RESPONSES.default;
 }
 
-export interface MockStreamCallbacks {
-  onToken: (token: string) => void;
-  onComplete: (fullContent: string) => void;
+export interface MockResponseCallbacks {
+  onResponse: (fullContent: string) => void;
   onError?: (error: string) => void;
 }
 
 /**
- * Streams a mock response token by token with realistic typing delays
+ * Gets the mock response immediately (no streaming).
+ * Use this when you want the full response at once for TTS synchronization.
  * @param userMessage The user's input message
- * @param callbacks Callbacks for streaming events
- * @returns A cancel function to stop the stream
+ * @param callbacks Callbacks for response events
  */
-export function streamMockResponse(
+export function getMockResponse(
   userMessage: string,
-  callbacks: MockStreamCallbacks
-): () => void {
+  callbacks: MockResponseCallbacks
+): void {
   const response = selectResponse(userMessage);
-  let currentIndex = 0;
-  let isCancelled = false;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  const streamNextToken = () => {
-    if (isCancelled || currentIndex >= response.length) {
-      if (!isCancelled) {
-        callbacks.onComplete(response);
-      }
-      return;
-    }
-
-    // Stream 1-3 characters at a time for natural feel
-    const chunkSize = Math.floor(Math.random() * 3) + 1;
-    const endIndex = Math.min(currentIndex + chunkSize, response.length);
-    const token = response.substring(currentIndex, endIndex);
-
-    callbacks.onToken(token);
-    currentIndex = endIndex;
-
-    // Variable delay for natural typing effect (20-60ms per chunk)
-    const delay = Math.floor(Math.random() * 40) + 20;
-    timeoutId = setTimeout(streamNextToken, delay);
-  };
-
-  // Start streaming after a brief "thinking" delay
-  timeoutId = setTimeout(streamNextToken, 500);
-
-  // Return cancel function
-  return () => {
-    isCancelled = true;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  };
+  
+  // Brief "thinking" delay before returning response
+  setTimeout(() => {
+    callbacks.onResponse(response);
+  }, 300);
 }
 
 /**
