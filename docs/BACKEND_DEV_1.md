@@ -13,7 +13,7 @@ You are responsible for the **infrastructure layer** of Project Jarvis:
 
 ## Implementation Status
 
-> **Last Updated:** February 7, 2026
+> **Last Updated:** February 7, 2026 (Updated: Auth system marked as complete)
 
 ### Completed
 
@@ -23,7 +23,11 @@ You are responsible for the **infrastructure layer** of Project Jarvis:
 | Database Schema | **DONE** | Users, secrets, agent runs, memories, KG, tool permissions |
 | Config Management | **DONE** | Zod validation in `infrastructure/config/` |
 | Logging Infrastructure | **DONE** | Structured logging in `infrastructure/logging/` |
-| Auth Middleware (Placeholder) | **PARTIAL** | JWT extraction works, validation is placeholder |
+| Auth Service | **DONE** | JWT + refresh token rotation in `application/services/auth-service.ts` |
+| Auth Middleware | **DONE** | Real JWT validation in `api/http/middleware/auth.ts` |
+| User Repository | **DONE** | `adapters/storage/user-repository.ts` |
+| Refresh Token Repository | **DONE** | `adapters/storage/refresh-token-repository.ts` |
+| Auth Routes | **DONE** | register, login, refresh, logout, logout-all, me at `/api/v1/auth` |
 | Secrets API | **DONE** | Full CRUD at `/api/v1/secrets` |
 | pgvector Indexes | **DONE** | HNSW indexes in `003_vector_indexes.sql` |
 | Memory Repository (Postgres) | **DONE** | `PgMemoryStore` with vector search |
@@ -168,80 +172,87 @@ apps/backend/
 - Build secure secrets encryption/decryption
 - Create auth middleware and rate limiting
 
-### Current State
+### Status: COMPLETE
 
-**Auth Middleware:** `apps/backend/src/api/http/middleware/auth.ts`
-- Extracts Bearer token from Authorization header
-- **PLACEHOLDER**: Currently accepts any token and uses anonymous user ID
-- Needs real JWT validation implementation
-
-**TODOs in auth.ts:**
-```typescript
-// TODO: Implement actual JWT validation for production
-// TODO: Validate JWT token and extract user ID
-// TODO: Validate JWT and extract user ID
-```
+All Week 2 objectives have been implemented with 24 passing integration tests.
 
 ### Day 1-2: User Repository & Auth Service
 
-**Status: NOT STARTED**
+**Status: DONE**
 
-Need to create:
-- `apps/backend/src/adapters/storage/user-repository.ts`
-- `apps/backend/src/adapters/storage/refresh-token-repository.ts`
-- `apps/backend/src/application/services/auth-service.ts`
+Implemented:
+- `apps/backend/src/adapters/storage/user-repository.ts` - User CRUD with email normalization
+- `apps/backend/src/adapters/storage/refresh-token-repository.ts` - Token storage with SHA-256 hashing
+- `apps/backend/src/application/services/auth-service.ts` - Full auth flow with bcrypt (12 rounds)
+
+Features:
+- Password validation (min 8 chars, letter + number)
+- Email normalization (lowercase, trimmed)
+- Token rotation on refresh
+- Logout from all devices
 
 ### Day 2-3: JWT Auth Middleware
 
-**Status: PARTIAL**
+**Status: DONE**
 
-Current implementation in `auth.ts`:
-```typescript
-export function authMiddleware(c: Context, next: Next) {
-  // Currently placeholder - accepts anonymous user
-  // TODO: Implement actual JWT validation
-}
-```
+Implemented at `apps/backend/src/api/http/middleware/auth.ts`:
+- Real JWT validation using `jsonwebtoken` library
+- Extracts `userId` and `userEmail` from token payload
+- Optional auth middleware for public routes with optional user context
+- Proper 401 responses with error codes
 
 ### Day 3-4: Secrets Encryption Module
 
-**Status: NOT STARTED**
+**Status: DONE**
 
-Design exists in original guide, needs implementation:
-- `apps/backend/src/infrastructure/crypto/secrets.ts`
-- `apps/backend/src/application/services/secrets-service.ts`
+Implemented:
+- `apps/backend/src/infrastructure/crypto/secrets.ts` - AES-256-GCM encryption
+- `apps/backend/src/application/services/secrets-service.ts` - Secret management
+- `apps/backend/src/adapters/storage/user-secret-repository.ts` - Encrypted storage
 
 ### Day 4-5: Secrets CRUD API
 
-**Status: NOT STARTED**
+**Status: DONE**
 
-Need to create:
-- `apps/backend/src/api/http/routes/secrets.ts`
+Implemented at `/api/v1/secrets`:
+- `GET /` - List user's secrets (values redacted)
+- `POST /` - Create new secret
+- `PATCH /:id` - Update secret
+- `DELETE /:id` - Delete secret
 
-### Files to Create This Week
+### Auth Routes
+
+Implemented at `/api/v1/auth`:
+- `POST /register` - Create account, returns tokens
+- `POST /login` - Authenticate, returns tokens
+- `POST /refresh` - Refresh access token (token rotation)
+- `POST /logout` - Invalidate refresh token
+- `POST /logout-all` - Invalidate all user sessions
+- `GET /me` - Get current user profile
+
+### Files Created
 
 ```
 apps/backend/src/
   adapters/storage/
-    user-repository.ts          # NOT STARTED
-    refresh-token-repository.ts # NOT STARTED
-    user-secret-repository.ts   # NOT STARTED
+    user-repository.ts          # DONE
+    refresh-token-repository.ts # DONE
+    user-secret-repository.ts   # DONE
   application/services/
-    auth-service.ts             # NOT STARTED
-    secrets-service.ts          # NOT STARTED
+    auth-service.ts             # DONE
+    secrets-service.ts          # DONE
   api/
     http/
       routes/
-        auth.ts                 # NOT STARTED
-        secrets.ts              # NOT STARTED
-    middleware/
-      auth.ts                   # PARTIAL (placeholder)
-      validate.ts               # NOT STARTED
-      error-handler.ts          # NOT STARTED
+        auth.ts                 # DONE (24 tests)
+        secrets.ts              # DONE
+      middleware/
+        auth.ts                 # DONE
+        error-handler.ts        # DONE
   infrastructure/crypto/
-    secrets.ts                  # NOT STARTED
+    secrets.ts                  # DONE
   domain/
-    errors.ts                   # DONE (in shared-types)
+    errors/                     # DONE (shared-types)
 ```
 
 ---
@@ -507,6 +518,13 @@ The orchestrator is fully functional. Most in-memory adapters have been replaced
    - Usage aggregation at `/api/v1/usage`
    - Daily/monthly breakdowns
 
+6. **~~JWT Authentication~~** **DONE**
+   - `AuthService` with bcrypt password hashing (12 rounds)
+   - JWT access tokens with configurable expiry
+   - Refresh token rotation with SHA-256 hashed storage
+   - Real JWT validation in auth middleware
+   - 24 passing integration tests
+
 ### High Priority (Remaining)
 
 1. **Replace `InMemoryOrchestratorStateRepository`**
@@ -514,14 +532,9 @@ The orchestrator is fully functional. Most in-memory adapters have been replaced
    - Persist runs, plans, agent states
    - Located at `apps/backend/src/adapters/orchestrator/`
 
-2. **Implement Real Auth**
-   - Update `apps/backend/src/api/http/middleware/auth.ts`
-   - Add JWT validation with jsonwebtoken
-   - Extract user ID from token claims
-
 ### Medium Priority (Remaining)
 
-3. **Add Rate Limiting**
+2. **Add Rate Limiting**
    - Per-IP global limits
    - Per-user request limits
    - Agent run concurrency limits
@@ -532,14 +545,14 @@ The orchestrator is fully functional. Most in-memory adapters have been replaced
 ## Testing Checklist
 
 ### Unit Tests
-- [ ] Auth service (register, login, refresh, logout)
+- [x] Auth service (register, login, refresh, logout) - 24 tests in auth.test.ts
 - [ ] Secrets encryption/decryption
 - [x] Repository CRUD operations (PgMemoryStore, PgKnowledgeGraph have tests)
 - [ ] Rate limiting logic
 - [x] Tool permission repository
 
 ### Integration Tests
-- [ ] Auth flow end-to-end
+- [x] Auth flow end-to-end - Full coverage in auth.test.ts
 - [x] Secrets API
 - [x] SSE event streaming
 - [x] Vector similarity search (PgMemoryStore.test.ts)
@@ -547,7 +560,7 @@ The orchestrator is fully functional. Most in-memory adapters have been replaced
 - [x] Usage API
 
 ### Security Tests
-- [ ] JWT validation edge cases
+- [x] JWT validation edge cases - Covered in auth.test.ts
 - [ ] Secrets never logged
 - [ ] Rate limiting effectiveness
 - [ ] RLS policy enforcement
@@ -566,7 +579,19 @@ The orchestrator is fully functional. Most in-memory adapters have been replaced
 - **Update Needed:** Document SSE format (not WebSocket)
 - **Completed:** Tool permissions API documented
 - **Completed:** Usage API documented
-- **Pending:** JWT payload format documentation
+- **Completed:** JWT payload format documented (see `TokenPayload` in auth-service.ts)
+
+### JWT Token Format
+
+Access tokens contain the following payload:
+```typescript
+interface TokenPayload {
+  userId: string;  // UUID
+  email: string;   // User's email address
+}
+```
+
+Tokens are signed with `JWT_SECRET` and expire according to `JWT_ACCESS_EXPIRY` (default: 15m).
 
 ### API Endpoints Summary
 
