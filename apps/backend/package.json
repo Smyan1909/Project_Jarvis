@@ -9,7 +9,10 @@
     "lint": "echo \"Add lint script\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node --env-file=.env --import=tsx src/infrastructure/db/migrate.ts"
+    "db:migrate": "node --env-file=.env --import=tsx src/infrastructure/db/migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --env-file=.env"
   },
   "dependencies": {
     "@project-jarvis/shared-types": "workspace:*",
@@ -20,8 +23,10 @@
   "devDependencies": {
     "@types/node": "^25.2.1",
     "@types/pg": "^8.16.0",
+    "dotenv": "^17.2.4",
     "drizzle-kit": "^0.31.8",
     "tsx": "^4.21.0",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.0.18"
   }
 }
