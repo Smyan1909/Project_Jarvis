@@ -7,6 +7,9 @@
 import { UserRepository } from '../adapters/storage/user-repository.js';
 import { RefreshTokenRepository } from '../adapters/storage/refresh-token-repository.js';
 import { UserSecretRepository } from '../adapters/storage/user-secret-repository.js';
+import { AgentRunRepository } from '../adapters/storage/agent-run-repository.js';
+import { MessageRepository } from '../adapters/storage/message-repository.js';
+import { ToolCallRepository } from '../adapters/storage/tool-call-repository.js';
 import { AuthService } from '../application/services/auth-service.js';
 import { SecretsService } from '../application/services/secrets-service.js';
 
@@ -28,6 +31,24 @@ export const refreshTokenRepository = new RefreshTokenRepository();
  * User secret repository singleton
  */
 export const userSecretRepository = new UserSecretRepository();
+
+/**
+ * Agent run repository singleton
+ * Tracks agent execution sessions with status and cost metrics
+ */
+export const agentRunRepository = new AgentRunRepository();
+
+/**
+ * Message repository singleton
+ * Stores conversation history within agent runs
+ */
+export const messageRepository = new MessageRepository();
+
+/**
+ * Tool call repository singleton
+ * Tracks individual tool invocations during agent runs
+ */
+export const toolCallRepository = new ToolCallRepository();
 
 // =============================================================================
 // Application Services
