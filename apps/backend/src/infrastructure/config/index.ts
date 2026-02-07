@@ -18,6 +18,13 @@ const envSchema = z.object({
     // Secrets encryption
     SECRETS_MASTER_KEY: z.string().length(64), // 32 bytes hex-encoded
 
+    // CORS
+    CORS_ORIGIN: z.string().default('*'),
+
+    // WebSocket
+    WS_PING_INTERVAL: z.coerce.number().default(25000), // 25 seconds
+    WS_PING_TIMEOUT: z.coerce.number().default(5000),   // 5 seconds
+
     // LLM (optional - can use user secrets)
     OPENAI_API_KEY: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
