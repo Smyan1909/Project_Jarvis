@@ -632,7 +632,7 @@ describe('Auth Routes Integration', () => {
 
     it('should return 0 sessions if no active sessions', async () => {
       const email = generateTestEmail();
-      
+
       // Register
       const registerRes = await request('/api/v1/auth/register', {
         method: 'POST',
@@ -642,7 +642,7 @@ describe('Auth Routes Integration', () => {
           password: 'password123',
         }),
       });
-      
+
       const registerBody = await registerRes.json() as AuthSuccessResponse;
       const accessToken = registerBody.data.tokens.accessToken;
       const refreshToken = registerBody.data.tokens.refreshToken;
@@ -661,9 +661,237 @@ describe('Auth Routes Integration', () => {
       });
 
       expect(res.status).toBe(200);
-      
+
       const body = await res.json() as LogoutAllSuccessResponse;
       expect(body.data.sessionsRevoked).toBe(0);
+    });
+  });
+
+  // ===========================================================================
+  // POST /api/v1/auth/reset-password
+  // ===========================================================================
+
+  describe('POST /api/v1/auth/reset-password', () => {
+    it('should reset password successfully', async () => {
+      const email = generateTestEmail();
+      const oldPassword = 'password123';
+      const newPassword = 'newpassword456';
+
+      // Register
+      const registerRes = await request('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: oldPassword }),
+      });
+
+      const registerBody = await registerRes.json() as AuthSuccessResponse;
+      const accessToken = registerBody.data.tokens.accessToken;
+
+      // Reset password
+      const res = await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newPassword }),
+      });
+
+      expect(res.status).toBe(204);
+    });
+
+    it('should allow login with new password after reset', async () => {
+      const email = generateTestEmail();
+      const oldPassword = 'password123';
+      const newPassword = 'newpassword456';
+
+      // Register
+      const registerRes = await request('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: oldPassword }),
+      });
+
+      const registerBody = await registerRes.json() as AuthSuccessResponse;
+      const accessToken = registerBody.data.tokens.accessToken;
+
+      // Reset password
+      await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newPassword }),
+      });
+
+      // Try to login with NEW password (should succeed - this is the bug fix!)
+      const loginRes = await request('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: newPassword }),
+      });
+
+      expect(loginRes.status).toBe(200);
+
+      const loginBody = await loginRes.json() as AuthSuccessResponse;
+      expect(loginBody.data.user.email).toBe(email.toLowerCase());
+      expect(loginBody.data.tokens.accessToken).toBeDefined();
+    });
+
+    it('should reject login with old password after reset', async () => {
+      const email = generateTestEmail();
+      const oldPassword = 'password123';
+      const newPassword = 'newpassword456';
+
+      // Register
+      const registerRes = await request('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: oldPassword }),
+      });
+
+      const registerBody = await registerRes.json() as AuthSuccessResponse;
+      const accessToken = registerBody.data.tokens.accessToken;
+
+      // Reset password
+      await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newPassword }),
+      });
+
+      // Try to login with OLD password (should fail)
+      const loginRes = await request('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: oldPassword }),
+      });
+
+      expect(loginRes.status).toBe(401);
+    });
+
+    it('should invalidate all refresh tokens after password reset', async () => {
+      const email = generateTestEmail();
+      const oldPassword = 'password123';
+      const newPassword = 'newpassword456';
+
+      // Register (creates first session)
+      const registerRes = await request('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: oldPassword }),
+      });
+
+      const registerBody = await registerRes.json() as AuthSuccessResponse;
+      const accessToken = registerBody.data.tokens.accessToken;
+      const oldRefreshToken = registerBody.data.tokens.refreshToken;
+
+      // Login again (creates second session)
+      const loginRes = await request('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: oldPassword }),
+      });
+
+      const loginBody = await loginRes.json() as AuthSuccessResponse;
+      const oldRefreshToken2 = loginBody.data.tokens.refreshToken;
+
+      // Reset password
+      await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newPassword }),
+      });
+
+      // Both old refresh tokens should be invalid now
+      const refresh1Res = await request('/api/v1/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: oldRefreshToken }),
+      });
+      expect(refresh1Res.status).toBe(401);
+
+      const refresh2Res = await request('/api/v1/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: oldRefreshToken2 }),
+      });
+      expect(refresh2Res.status).toBe(401);
+    });
+
+    it('should reject password reset without authentication', async () => {
+      const res = await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword: 'newpassword456' }),
+      });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('should reject invalid new password', async () => {
+      const email = generateTestEmail();
+
+      // Register
+      const registerRes = await request('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password: 'password123',
+        }),
+      });
+
+      const registerBody = await registerRes.json() as AuthSuccessResponse;
+      const accessToken = registerBody.data.tokens.accessToken;
+
+      // Try to reset with invalid password (too short)
+      const res = await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newPassword: 'short1' }),
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject password without letter and number', async () => {
+      const email = generateTestEmail();
+
+      // Register
+      const registerRes = await request('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password: 'password123',
+        }),
+      });
+
+      const registerBody = await registerRes.json() as AuthSuccessResponse;
+      const accessToken = registerBody.data.tokens.accessToken;
+
+      // Try to reset with password without number
+      const res = await request('/api/v1/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ newPassword: 'onlyletters' }),
+      });
+
+      expect(res.status).toBe(400);
     });
   });
 });

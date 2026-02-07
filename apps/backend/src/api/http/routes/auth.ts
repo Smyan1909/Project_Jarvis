@@ -44,6 +44,13 @@ const logoutSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
+/**
+ * Reset password (requires authentication)
+ */
+const resetPasswordSchema = z.object({
+  newPassword: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
 // =============================================================================
 // Routes
 // =============================================================================
@@ -223,4 +230,27 @@ authRoutes.post('/logout-all', authMiddleware, async (c) => {
       sessionsRevoked: count,
     },
   });
+});
+
+/**
+ * POST /api/v1/auth/reset-password
+ * Reset user password (requires authentication)
+ *
+ * Requires: Bearer token in Authorization header
+ *
+ * Request body:
+ * - newPassword: string (required, min 8 chars, must contain letter and number)
+ *
+ * Response: 204 No Content
+ *
+ * Note: This invalidates all existing refresh tokens for security.
+ * User will need to log in again with the new password.
+ */
+authRoutes.post('/reset-password', authMiddleware, zValidator('json', resetPasswordSchema), async (c) => {
+  const userId = c.get('userId');
+  const { newPassword } = c.req.valid('json');
+
+  await authService.resetPassword(userId, newPassword);
+
+  return c.body(null, 204);
 });
