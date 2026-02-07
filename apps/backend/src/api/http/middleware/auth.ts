@@ -1,109 +1,144 @@
 // =============================================================================
 // Authentication Middleware
 // =============================================================================
-// Stub implementation - to be completed with actual JWT validation
+// JWT-based authentication middleware for protected routes.
 
 import type { Context, Next } from 'hono';
+import { authService } from '../../../services/index.js';
+
+// =============================================================================
+// Types
+// =============================================================================
 
 /**
- * Variables added to context by auth middleware
+ * Variables added to Hono context by auth middleware
  */
 export interface AuthVariables {
   userId: string;
+  userEmail: string;
 }
 
+// =============================================================================
+// Auth Middleware
+// =============================================================================
+
 /**
- * Authentication middleware
+ * Authentication middleware - requires valid JWT token
  *
- * Currently a stub that allows unauthenticated requests in development.
- * TODO: Implement actual JWT validation for production.
+ * Validates the Authorization header and extracts user info from the JWT.
+ * Throws an error if the token is missing, invalid, or expired.
  *
  * Usage:
  * ```typescript
  * import { authMiddleware } from './middleware/auth.js';
  *
- * app.use('/api/v1/*', authMiddleware);
- *
- * // Access userId in route handlers
- * app.get('/api/v1/me', (c) => {
+ * // Protect a single route
+ * app.get('/api/v1/me', authMiddleware, (c) => {
  *   const userId = c.get('userId');
- *   return c.json({ userId });
+ *   const userEmail = c.get('userEmail');
+ *   return c.json({ userId, userEmail });
  * });
+ *
+ * // Protect all routes under a path
+ * app.use('/api/v1/protected/*', authMiddleware);
  * ```
  */
 export async function authMiddleware(c: Context, next: Next): Promise<Response | void> {
   const authHeader = c.req.header('Authorization');
 
   if (!authHeader) {
-    // In development, allow unauthenticated requests
-    if (process.env.NODE_ENV === 'development') {
-      c.set('userId', 'dev-user-anonymous');
-      return next();
-    }
-
     return c.json(
       {
-        error: 'Unauthorized',
-        message: 'Authorization header is required',
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Authorization header is required',
+        },
       },
       401
     );
   }
 
-  // Extract token from "Bearer <token>" format
-  const token = authHeader.replace('Bearer ', '');
+  if (!authHeader.startsWith('Bearer ')) {
+    return c.json(
+      {
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Invalid authorization format. Use: Bearer <token>',
+        },
+      },
+      401
+    );
+  }
+
+  const token = authHeader.slice(7);
 
   if (!token) {
     return c.json(
       {
-        error: 'Unauthorized',
-        message: 'Invalid authorization format. Use: Bearer <token>',
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Token is required',
+        },
       },
       401
     );
   }
 
-  // TODO: Validate JWT token and extract user ID
-  // For now, use a placeholder
   try {
-    // Placeholder: In production, validate the JWT here
-    // const payload = await validateJWT(token);
-    // c.set('userId', payload.sub);
+    const payload = authService.verifyAccessToken(token);
 
-    // Stub implementation
-    c.set('userId', 'user-from-token');
+    c.set('userId', payload.userId);
+    c.set('userEmail', payload.email);
 
     return next();
   } catch (error) {
     return c.json(
       {
-        error: 'Unauthorized',
-        message: 'Invalid or expired token',
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Invalid or expired access token',
+        },
       },
       401
     );
   }
 }
 
+// =============================================================================
+// Optional Auth Middleware
+// =============================================================================
+
 /**
  * Optional authentication middleware
  *
- * Sets userId if Authorization header is present, but doesn't require it.
+ * Sets userId and userEmail if a valid token is present, but doesn't require it.
  * Useful for endpoints that behave differently for authenticated users.
+ *
+ * If no token or invalid token:
+ * - userId is set to empty string
+ * - userEmail is set to empty string
  */
 export async function optionalAuthMiddleware(c: Context, next: Next): Promise<Response | void> {
   const authHeader = c.req.header('Authorization');
 
-  if (authHeader) {
-    const token = authHeader.replace('Bearer ', '');
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
 
     if (token) {
-      // TODO: Validate JWT and extract user ID
-      c.set('userId', 'user-from-token');
+      try {
+        const payload = authService.verifyAccessToken(token);
+        c.set('userId', payload.userId);
+        c.set('userEmail', payload.email);
+        return next();
+      } catch {
+        // Invalid token - continue as unauthenticated
+      }
     }
-  } else {
-    c.set('userId', 'anonymous');
   }
+
+  // No token or invalid token - set empty values
+  c.set('userId', '');
+  c.set('userEmail', '');
 
   return next();
 }
