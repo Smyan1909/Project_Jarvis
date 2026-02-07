@@ -151,31 +151,18 @@ export class PgOrchestratorStateRepository implements IOrchestratorStateReposito
     planId: string,
     node: Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'>
   ): Promise<TaskNode> {
-    // Format dependencies as PostgreSQL UUID array literal
+    // Dependencies are stored as JSONB array
     const deps = node.dependencies || [];
-    const depsArrayLiteral = deps.length > 0 ? `{${deps.join(',')}}` : '{}';
     
-    // Use raw SQL with proper UUID[] array syntax
-    const result = await db.execute(sql`
-      INSERT INTO task_nodes (plan_id, description, agent_type, dependencies, status)
-      VALUES (${planId}, ${node.description}, ${node.agentType}, ${depsArrayLiteral}::uuid[], 'pending')
-      RETURNING *
-    `);
+    const [created] = await db.insert(taskNodes).values({
+      planId,
+      description: node.description,
+      agentType: node.agentType,
+      dependencies: deps,
+      status: 'pending',
+    }).returning();
 
-    const rows = result as unknown as Array<Record<string, unknown>>;
-    const row = rows[0];
-    return {
-      id: row.id as string,
-      description: row.description as string,
-      agentType: row.agent_type as AgentType,
-      status: row.status as TaskNodeStatus,
-      dependencies: (row.dependencies as string[]) || [],
-      assignedAgentId: row.assigned_agent_id as string | null,
-      result: row.result,
-      retryCount: row.retry_count as number,
-      createdAt: new Date(row.created_at as string),
-      completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
-    };
+    return rowToTaskNode(created);
   }
 
   async createTaskNodes(
@@ -184,35 +171,17 @@ export class PgOrchestratorStateRepository implements IOrchestratorStateReposito
   ): Promise<TaskNode[]> {
     if (nodes.length === 0) return [];
 
-    // Insert nodes one at a time with proper UUID[] array handling for dependencies
-    const results: TaskNode[] = [];
-    for (const node of nodes) {
-      // Format dependencies as PostgreSQL UUID array literal
-      const deps = node.dependencies || [];
-      const depsArrayLiteral = deps.length > 0 ? `{${deps.join(',')}}` : '{}';
-      
-      const result = await db.execute(sql`
-        INSERT INTO task_nodes (plan_id, description, agent_type, dependencies, status)
-        VALUES (${planId}, ${node.description}, ${node.agentType}, ${depsArrayLiteral}::uuid[], 'pending')
-        RETURNING *
-      `);
-      const rows = result as unknown as Array<Record<string, unknown>>;
-      const row = rows[0];
-      results.push({
-        id: row.id as string,
-        description: row.description as string,
-        agentType: row.agent_type as AgentType,
-        status: row.status as TaskNodeStatus,
-        dependencies: (row.dependencies as string[]) || [],
-        assignedAgentId: row.assigned_agent_id as string | null,
-        result: row.result,
-        retryCount: row.retry_count as number,
-        createdAt: new Date(row.created_at as string),
-        completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
-      });
-    }
+    // Insert all nodes at once - dependencies are stored as JSONB arrays
+    const valuesToInsert = nodes.map((node) => ({
+      planId,
+      description: node.description,
+      agentType: node.agentType,
+      dependencies: node.dependencies || [],
+      status: 'pending' as const,
+    }));
 
-    return results;
+    const created = await db.insert(taskNodes).values(valuesToInsert).returning();
+    return created.map(rowToTaskNode);
   }
 
   async getTaskNode(nodeId: string): Promise<TaskNode | null> {
@@ -279,36 +248,18 @@ export class PgOrchestratorStateRepository implements IOrchestratorStateReposito
   async createSubAgent(
     state: Omit<SubAgentState, 'id' | 'startedAt' | 'completedAt' | 'totalTokens' | 'totalCost' | 'messages' | 'toolCalls' | 'reasoningSteps' | 'artifacts'>
   ): Promise<SubAgentState> {
-    // Format additionalTools as PostgreSQL TEXT[] array literal
-    const tools = state.additionalTools || [];
-    const toolsArrayLiteral = tools.length > 0 ? `{${tools.join(',')}}` : '{}';
+    // additionalTools is stored as JSONB array
+    const [created] = await db.insert(subAgents).values({
+      runId: state.runId,
+      taskNodeId: state.taskNodeId,
+      agentType: state.agentType,
+      status: state.status,
+      taskDescription: state.taskDescription,
+      upstreamContext: state.upstreamContext,
+      additionalTools: state.additionalTools || [],
+    }).returning();
 
-    const result = await db.execute(sql`
-      INSERT INTO sub_agents (run_id, task_node_id, agent_type, status, task_description, upstream_context, additional_tools)
-      VALUES (${state.runId}, ${state.taskNodeId}, ${state.agentType}, ${state.status}, ${state.taskDescription}, ${state.upstreamContext}, ${toolsArrayLiteral}::text[])
-      RETURNING *
-    `);
-
-    const rows = result as unknown as Array<Record<string, unknown>>;
-    const row = rows[0];
-    return {
-      id: row.id as string,
-      runId: row.run_id as string,
-      taskNodeId: row.task_node_id as string,
-      agentType: row.agent_type as AgentType,
-      status: row.status as SubAgentStatus,
-      taskDescription: row.task_description as string,
-      upstreamContext: row.upstream_context as string | null,
-      additionalTools: (row.additional_tools as string[]) || [],
-      messages: (row.messages as LLMMessage[]) || [],
-      toolCalls: (row.tool_calls as ToolCall[]) || [],
-      reasoningSteps: (row.reasoning_steps as ReasoningStep[]) || [],
-      artifacts: (row.artifacts as Artifact[]) || [],
-      totalTokens: Number(row.total_tokens) || 0,
-      totalCost: Number(row.total_cost) || 0,
-      startedAt: new Date(row.started_at as string),
-      completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
-    };
+    return rowToSubAgentState(created);
   }
 
   async getSubAgent(agentId: string): Promise<SubAgentState | null> {
@@ -502,20 +453,24 @@ export class PgOrchestratorStateRepository implements IOrchestratorStateReposito
   }
 
   async addActiveAgent(runId: string, agentId: string): Promise<void> {
-    // Use native PostgreSQL array concatenation for UUID[]
+    // activeAgentIds is stored as JSONB array - use jsonb concatenation
     await db.execute(sql`
       UPDATE orchestrator_states
-      SET active_agent_ids = array_append(active_agent_ids, ${agentId}::uuid),
+      SET active_agent_ids = active_agent_ids || to_jsonb(${agentId}::text),
           updated_at = NOW()
       WHERE run_id = ${runId}
     `);
   }
 
   async removeActiveAgent(runId: string, agentId: string): Promise<void> {
-    // Use native PostgreSQL array_remove for UUID[]
+    // activeAgentIds is stored as JSONB array - filter out the agent ID
     await db.execute(sql`
       UPDATE orchestrator_states
-      SET active_agent_ids = array_remove(active_agent_ids, ${agentId}::uuid),
+      SET active_agent_ids = (
+        SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb)
+        FROM jsonb_array_elements(active_agent_ids) AS elem
+        WHERE elem::text != ${JSON.stringify(agentId)}
+      ),
           updated_at = NOW()
       WHERE run_id = ${runId}
     `);

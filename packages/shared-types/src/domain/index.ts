@@ -6,3 +6,4 @@ export * from './kg.js';
 export * from './orchestrator.js';
 export * from './mcp.js';
 export * from './conversation.js';
+export * from './monitoring.js';

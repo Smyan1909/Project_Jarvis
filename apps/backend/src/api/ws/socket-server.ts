@@ -8,7 +8,7 @@ import { Server as HttpServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import type { AuthService } from '../../application/services/auth-service.js';
 import { logger } from '../../infrastructure/logging/logger.js';
-import type { AgentEvent } from '@project-jarvis/shared-types';
+import type { AgentEvent, StreamEvent } from '@project-jarvis/shared-types';
 
 // =============================================================================
 // Types
@@ -199,9 +199,9 @@ export class SocketServer {
    * Send an event to all of a user's connected sockets
    *
    * @param userId - Target user ID
-   * @param event - Agent event to send
+   * @param event - Stream event to send (includes agent, orchestrator, MCP, and monitoring events)
    */
-  emitToUser(userId: string, event: AgentEvent): void {
+  emitToUser(userId: string, event: StreamEvent): void {
     this.io.to(`user:${userId}`).emit('agent:event', event);
   }
 
@@ -211,9 +211,9 @@ export class SocketServer {
    *
    * @param userId - Target user ID (for authorization)
    * @param runId - Agent run ID
-   * @param event - Agent event to send
+   * @param event - Stream event to send
    */
-  emitToRun(userId: string, runId: string, event: AgentEvent): void {
+  emitToRun(userId: string, runId: string, event: StreamEvent): void {
     // Emit to both user room and run room to ensure delivery
     // User room: guaranteed delivery to all user sockets
     // Run room: targeted delivery for clients following specific runs

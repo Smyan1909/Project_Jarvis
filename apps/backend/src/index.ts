@@ -12,6 +12,29 @@ import { SocketServer } from './api/ws/socket-server.js';
 import { authService } from './services/index.js';
 import { config } from './infrastructure/config/index.js';
 
+// Monitoring Agent imports
+import { createWebhookRoutes } from './api/http/routes/webhooks.js';
+import { createMonitoringRoutes } from './api/http/routes/monitoring.js';
+import { createOrchestratorService } from './api/http/routes/orchestrator.js';
+import { MonitoringAgentService, type ComposioServiceInterface } from './application/services/MonitoringAgentService.js';
+import { TriggerReplyService } from './application/services/TriggerReplyService.js';
+import { PushNotificationService } from './application/services/PushNotificationService.js';
+import { TriggerSubscriptionRepository } from './adapters/storage/trigger-subscription-repository.js';
+import { MonitoredEventRepository } from './adapters/storage/monitored-event-repository.js';
+import { SlackPriorityContactRepository } from './adapters/storage/slack-priority-contact-repository.js';
+import { PushTokenRepository } from './adapters/storage/push-token-repository.js';
+
+// Composio integration for GitHub/Slack replies
+import {
+  getComposioClient,
+  createComposioIntegrationService,
+  getEnvConfig as getComposioEnvConfig,
+} from '@project-jarvis/mcp-servers';
+import { logger } from './infrastructure/logging/logger.js';
+
+// Scheduled jobs
+import { scheduleCleanup as scheduleEventCleanup } from './infrastructure/jobs/cleanup-monitored-events.js';
+
 // =============================================================================
 // Configuration
 // =============================================================================
@@ -39,6 +62,60 @@ const socketServer = new SocketServer(httpServer, authService, {
   pingInterval: config.WS_PING_INTERVAL,
   pingTimeout: config.WS_PING_TIMEOUT,
 });
+
+// =============================================================================
+// Monitoring Agent Services
+// =============================================================================
+
+// Initialize repositories
+const triggerSubRepo = new TriggerSubscriptionRepository();
+const eventRepo = new MonitoredEventRepository();
+const priorityContactRepo = new SlackPriorityContactRepository();
+const pushTokenRepo = new PushTokenRepository();
+
+// Initialize services
+const replyService = new TriggerReplyService();
+const pushService = new PushNotificationService(pushTokenRepo, {
+  enabled: config.NODE_ENV === 'production', // Only send in production
+});
+
+// Initialize ComposioService for GitHub/Slack replies
+// If COMPOSIO_API_KEY is not set, replies will be disabled but monitoring still works
+let composioService: ComposioServiceInterface | null = null;
+try {
+  const composioClient = getComposioClient();
+  const composioEnvConfig = getComposioEnvConfig();
+  composioService = createComposioIntegrationService(
+    composioClient,
+    composioEnvConfig.callbackScheme
+  );
+  logger.info('ComposioService initialized for monitoring agent');
+} catch (error) {
+  logger.warn('ComposioService not available - GitHub/Slack replies disabled', {
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+const monitoringService = new MonitoringAgentService(
+  triggerSubRepo,
+  eventRepo,
+  priorityContactRepo,
+  replyService,
+  pushService,
+  socketServer,
+  createOrchestratorService, // Factory function for creating orchestrator instances
+  composioService,
+  { webhookUrl: config.COMPOSIO_WEBHOOK_URL || `http://localhost:${port}/api/v1/webhooks/composio` }
+);
+
+// Mount monitoring routes
+const webhookRoutes = createWebhookRoutes({ monitoringService });
+const monitoringRoutes = createMonitoringRoutes({ monitoringService, pushService });
+app.route('/api/v1/webhooks', webhookRoutes);
+app.route('/api/v1/monitoring', monitoringRoutes);
+
+// Schedule cleanup jobs
+scheduleEventCleanup();
 
 // =============================================================================
 // Start Server
