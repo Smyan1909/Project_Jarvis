@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { logger, correlationMiddleware } from './logger';
+import { logger, correlationMiddleware } from './logger.js';
 
 describe('Logger', () => {
     let consoleSpy: any;

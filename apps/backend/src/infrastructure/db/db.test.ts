@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { db, queryClient } from './client';
-import { users } from './schema';
+import { db, queryClient } from './client.js';
+import { users } from './schema.js';
 import { sql } from 'drizzle-orm';
 
 describe('Database Integration', () => {

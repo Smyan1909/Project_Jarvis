@@ -3,3 +3,4 @@ export * from './user.js';
 export * from './agent.js';
 export * from './memory.js';
 export * from './kg.js';
+export * from './orchestrator.js';

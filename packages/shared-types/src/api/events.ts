@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  AgentTypeSchema,
+  ReasoningStepSchema,
+  InterventionActionSchema,
+} from '../domain/orchestrator.js';
 
 // =============================================================================
 // Agent Token Event
@@ -78,7 +83,7 @@ export const AgentStatusEventSchema = z.object({
 export type AgentStatusEvent = z.infer<typeof AgentStatusEventSchema>;
 
 // =============================================================================
-// Agent Event (Discriminated Union)
+// Agent Event (Discriminated Union) - Core Agent Events
 // =============================================================================
 
 export const AgentEventSchema = z.discriminatedUnion('type', [
@@ -91,3 +96,200 @@ export const AgentEventSchema = z.discriminatedUnion('type', [
 ]);
 
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
+// =============================================================================
+// ORCHESTRATOR EVENTS
+// =============================================================================
+
+// =============================================================================
+// Plan Created Event
+// =============================================================================
+
+export const PlanCreatedEventSchema = z.object({
+  type: z.literal('plan.created'),
+  planId: z.string().uuid(),
+  taskCount: z.number().int().positive(),
+  structure: z.enum(['dag', 'sequential']),
+  tasks: z.array(
+    z.object({
+      id: z.string().uuid(),
+      description: z.string(),
+      agentType: AgentTypeSchema,
+      dependencies: z.array(z.string().uuid()),
+    })
+  ),
+});
+
+export type PlanCreatedEvent = z.infer<typeof PlanCreatedEventSchema>;
+
+// =============================================================================
+// Plan Modified Event
+// =============================================================================
+
+export const PlanModifiedEventSchema = z.object({
+  type: z.literal('plan.modified'),
+  planId: z.string().uuid(),
+  modification: z.enum(['task_added', 'task_removed', 'task_reordered', 'task_updated']),
+  reason: z.string(),
+  affectedTaskIds: z.array(z.string().uuid()),
+});
+
+export type PlanModifiedEvent = z.infer<typeof PlanModifiedEventSchema>;
+
+// =============================================================================
+// Task Started Event
+// =============================================================================
+
+export const TaskStartedEventSchema = z.object({
+  type: z.literal('task.started'),
+  taskId: z.string().uuid(),
+  description: z.string(),
+  agentType: AgentTypeSchema,
+  agentId: z.string().uuid(),
+});
+
+export type TaskStartedEvent = z.infer<typeof TaskStartedEventSchema>;
+
+// =============================================================================
+// Task Progress Event
+// =============================================================================
+
+export const TaskProgressEventSchema = z.object({
+  type: z.literal('task.progress'),
+  taskId: z.string().uuid(),
+  agentId: z.string().uuid(),
+  progress: z.string(), // Human-readable progress description
+});
+
+export type TaskProgressEvent = z.infer<typeof TaskProgressEventSchema>;
+
+// =============================================================================
+// Task Completed Event
+// =============================================================================
+
+export const TaskCompletedEventSchema = z.object({
+  type: z.literal('task.completed'),
+  taskId: z.string().uuid(),
+  success: z.boolean(),
+  result: z.unknown().optional(),
+  error: z.string().optional(),
+});
+
+export type TaskCompletedEvent = z.infer<typeof TaskCompletedEventSchema>;
+
+// =============================================================================
+// Agent Spawned Event
+// =============================================================================
+
+export const AgentSpawnedEventSchema = z.object({
+  type: z.literal('agent.spawned'),
+  agentId: z.string().uuid(),
+  taskId: z.string().uuid(),
+  agentType: AgentTypeSchema,
+  taskDescription: z.string(),
+});
+
+export type AgentSpawnedEvent = z.infer<typeof AgentSpawnedEventSchema>;
+
+// =============================================================================
+// Agent Reasoning Event
+// =============================================================================
+
+export const AgentReasoningEventSchema = z.object({
+  type: z.literal('agent.reasoning'),
+  agentId: z.string().uuid(),
+  step: ReasoningStepSchema,
+});
+
+export type AgentReasoningEvent = z.infer<typeof AgentReasoningEventSchema>;
+
+// =============================================================================
+// Agent Intervention Event
+// =============================================================================
+
+export const AgentInterventionEventSchema = z.object({
+  type: z.literal('agent.intervention'),
+  agentId: z.string().uuid(),
+  taskId: z.string().uuid(),
+  reason: z.string(),
+  action: InterventionActionSchema,
+  guidance: z.string().optional(),
+});
+
+export type AgentInterventionEvent = z.infer<typeof AgentInterventionEventSchema>;
+
+// =============================================================================
+// Agent Terminated Event
+// =============================================================================
+
+export const AgentTerminatedEventSchema = z.object({
+  type: z.literal('agent.terminated'),
+  agentId: z.string().uuid(),
+  taskId: z.string().uuid(),
+  reason: z.enum(['completed', 'failed', 'cancelled', 'loop_detected']),
+  error: z.string().optional(),
+});
+
+export type AgentTerminatedEvent = z.infer<typeof AgentTerminatedEventSchema>;
+
+// =============================================================================
+// Orchestrator Status Event
+// =============================================================================
+
+export const OrchestratorStatusEventSchema = z.object({
+  type: z.literal('orchestrator.status'),
+  status: z.enum(['idle', 'planning', 'executing', 'monitoring', 'completed', 'failed']),
+  message: z.string().optional(),
+});
+
+export type OrchestratorStatusEvent = z.infer<typeof OrchestratorStatusEventSchema>;
+
+// =============================================================================
+// Orchestrator Event (Discriminated Union)
+// =============================================================================
+
+export const OrchestratorEventSchema = z.discriminatedUnion('type', [
+  // Plan events
+  PlanCreatedEventSchema,
+  PlanModifiedEventSchema,
+  // Task events
+  TaskStartedEventSchema,
+  TaskProgressEventSchema,
+  TaskCompletedEventSchema,
+  // Agent lifecycle events
+  AgentSpawnedEventSchema,
+  AgentReasoningEventSchema,
+  AgentInterventionEventSchema,
+  AgentTerminatedEventSchema,
+  // Orchestrator status
+  OrchestratorStatusEventSchema,
+]);
+
+export type OrchestratorEvent = z.infer<typeof OrchestratorEventSchema>;
+
+// =============================================================================
+// Combined Event (All events that can be streamed to client)
+// =============================================================================
+
+export const StreamEventSchema = z.discriminatedUnion('type', [
+  // Core agent events
+  AgentTokenEventSchema,
+  AgentToolCallEventSchema,
+  AgentToolResultEventSchema,
+  AgentFinalEventSchema,
+  AgentErrorEventSchema,
+  AgentStatusEventSchema,
+  // Orchestrator events
+  PlanCreatedEventSchema,
+  PlanModifiedEventSchema,
+  TaskStartedEventSchema,
+  TaskProgressEventSchema,
+  TaskCompletedEventSchema,
+  AgentSpawnedEventSchema,
+  AgentReasoningEventSchema,
+  AgentInterventionEventSchema,
+  AgentTerminatedEventSchema,
+  OrchestratorStatusEventSchema,
+]);
+
+export type StreamEvent = z.infer<typeof StreamEventSchema>;
