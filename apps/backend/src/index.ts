@@ -1,11 +1,33 @@
-import { createServer } from "node:http";
+// =============================================================================
+// Project Jarvis Backend - Entry Point
+// =============================================================================
 
-const server = createServer((req: any, res: any) => {
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ status: "ok" }));
-});
+// Load environment variables from .env file
+import 'dotenv/config';
 
-server.listen(3000, () => {
-  // eslint-disable-next-line no-console
-  console.log("Backend listening on http://localhost:3000");
+import { serve } from '@hono/node-server';
+import { app } from './api/http/router.js';
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const isDev = process.env.NODE_ENV !== 'production';
+
+// =============================================================================
+// Start Server
+// =============================================================================
+
+serve({ fetch: app.fetch, port }, (info) => {
+  console.log('');
+  console.log('  Project Jarvis Backend');
+  console.log('  ─────────────────────────────────────');
+  console.log(`  Server:    http://localhost:${info.port}`);
+  console.log(`  Health:    http://localhost:${info.port}/health`);
+  console.log(`  Chat API:  http://localhost:${info.port}/api/v1/chat`);
+  console.log(`  Models:    http://localhost:${info.port}/api/v1/chat/models`);
+  console.log('  ─────────────────────────────────────');
+  console.log(`  Mode:      ${isDev ? 'development' : 'production'}`);
+  console.log('');
 });
