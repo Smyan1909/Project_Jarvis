@@ -19,7 +19,7 @@ import { theme } from '../theme';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MIN_PANEL_HEIGHT = SCREEN_HEIGHT * 0.30; // 30% of screen (minimum)
-const MAX_PANEL_HEIGHT = SCREEN_HEIGHT * 0.50; // 50% of screen (maximum)
+const MAX_PANEL_HEIGHT = SCREEN_HEIGHT * 0.60; // 60% of screen (maximum)
 const DRAG_THRESHOLD = 50;
 const RESIZE_ZONE_HEIGHT = 40; // Top area where dragging resizes instead of collapses
 
@@ -47,6 +47,25 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
     const [tempHeight, setTempHeight] = useState(MIN_PANEL_HEIGHT);
     const [isResizing, setIsResizing] = useState(false);
 
+    // Calculate required height based on transcription length
+    const calculateRequiredHeight = useCallback((text: string) => {
+      if (!text) return MIN_PANEL_HEIGHT;
+      
+      const charsPerLine = 35; // Slightly fewer chars accounting for padding
+      const lineHeight = 22; // Line height for body text
+      const numLines = Math.ceil(text.length / charsPerLine);
+      const textHeight = Math.max(60, numLines * lineHeight); // Minimum text area height
+      
+      const dragHandleHeight = 50;
+      const boxPadding = 32; // padding inside the box
+      const micButtonArea = 120; // mic button + status text + margins
+      const containerPadding = 40; // horizontal and bottom padding
+      
+      const requiredHeight = dragHandleHeight + textHeight + boxPadding + micButtonArea + containerPadding;
+      
+      return Math.max(MIN_PANEL_HEIGHT, Math.min(MAX_PANEL_HEIGHT, requiredHeight));
+    }, []);
+
     const {
       isListening,
       transcription,
@@ -61,6 +80,19 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
     const translateY = useRef(new Animated.Value(MIN_PANEL_HEIGHT)).current;
     const micScale = useRef(new Animated.Value(1)).current;
     const pulseAnimation = useRef<Animated.CompositeAnimation | null>(null);
+
+    // Effect to auto-resize when transcription changes
+    React.useEffect(() => {
+      if (panelState !== 'collapsed' && !isResizing) {
+        const newHeight = calculateRequiredHeight(transcription);
+        // Only update if height changed significantly (avoid jitter)
+        if (Math.abs(newHeight - panelHeight) > 10) {
+          setPanelHeight(newHeight);
+          // Snap instantly to new height without animation for responsiveness
+          translateY.setValue(0); 
+        }
+      }
+    }, [transcription, panelState, calculateRequiredHeight, panelHeight, isResizing, translateY]);
 
     // Track starting position for resize
     const startY = useRef(0);
@@ -84,10 +116,8 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
       }).start();
       setPanelState('collapsed');
       resetTranscription();
-      // Stop any ongoing recording
-      if (isListening) {
-        stopListening();
-      }
+      // Stop any ongoing recording - Unconditionally to ensure safety
+      stopListening();
       // Stop pulse animation
       pulseAnimation.current?.stop();
       micScale.setValue(1);
@@ -143,10 +173,10 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
       }).start();
     }, [micScale]);
 
-    // Toggle recording - tap once to start, tap again to stop
+    // Toggle recording - tap once to start, tap again to stop (keeps panel open)
     const handleMicPress = useCallback(async () => {
       if (panelState === 'recording' || isListening) {
-        // Currently recording - stop and go to confirming
+        // Currently recording - stop and show confirm/cancel options
         await stopListening();
         stopPulse();
         setPanelState('confirming');
@@ -158,6 +188,20 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
         await startListening();
       }
     }, [panelState, isListening, startListening, stopListening, startPulse, stopPulse, resetTranscription]);
+
+    // Track state in refs for PanResponder to avoid stale closures
+    const panelHeightRef = useRef(panelHeight);
+    const panelStateRef = useRef(panelState);
+    const initialHeightRef = useRef(panelHeight);
+
+    // Keep refs in sync
+    React.useEffect(() => {
+      panelHeightRef.current = panelHeight;
+    }, [panelHeight]);
+
+    React.useEffect(() => {
+      panelStateRef.current = panelState;
+    }, [panelState]);
 
     // Determine if touch started in resize zone (drag handle area)
     const isInResizeZone = useCallback((evt: GestureResponderEvent) => {
@@ -174,54 +218,70 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
         },
         onPanResponderGrant: (evt) => {
           startY.current = evt.nativeEvent.pageY;
+          initialHeightRef.current = panelHeightRef.current;
+          
           // Check if we're in resize zone when expanded
-          if (panelState !== 'collapsed' && panelState !== 'recording') {
+          if (panelStateRef.current !== 'collapsed' && panelStateRef.current !== 'recording') {
             setIsResizing(isInResizeZone(evt));
-            setTempHeight(panelHeight);
+            setTempHeight(panelHeightRef.current);
           }
         },
         onPanResponderMove: (evt, gestureState) => {
-          if (panelState === 'collapsed') {
+          const currentPanelState = panelStateRef.current;
+          const startH = initialHeightRef.current;
+          
+          if (currentPanelState === 'collapsed') {
             // Dragging up to expand
-            const newY = Math.max(0, panelHeight + gestureState.dy);
+            const newY = Math.max(0, startH + gestureState.dy);
             translateY.setValue(newY);
-          } else if (panelState !== 'recording') {
-            if (isResizing || gestureState.dy < 0) {
-              // Resizing - dragging up makes panel taller
-              const newHeight = Math.min(
-                MAX_PANEL_HEIGHT,
-                Math.max(MIN_PANEL_HEIGHT, panelHeight - gestureState.dy)
-              );
-              setTempHeight(newHeight);
-            } else {
-              // Dragging down to collapse
-              const newY = Math.max(0, gestureState.dy);
-              translateY.setValue(newY);
-            }
+          } else if (currentPanelState !== 'recording') {
+             // Unified Resize Logic: Dragging UP or DOWN resizes first
+             // Calculate potential new height
+             const potentialHeight = startH - gestureState.dy;
+             
+             if (potentialHeight >= MIN_PANEL_HEIGHT) {
+               // Resize territory
+               const clampedHeight = Math.min(MAX_PANEL_HEIGHT, potentialHeight);
+               setTempHeight(clampedHeight);
+               translateY.setValue(0); // Keep anchored at bottom
+             } else {
+               // Collapse territory (dragged below MIN height)
+               setTempHeight(MIN_PANEL_HEIGHT);
+               // The amount we dragged past the minimum
+               const overshoot = MIN_PANEL_HEIGHT - potentialHeight;
+               translateY.setValue(overshoot);
+             }
           }
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (panelState === 'collapsed') {
+          const currentPanelState = panelStateRef.current;
+          const startH = initialHeightRef.current;
+
+          if (currentPanelState === 'collapsed') {
             if (gestureState.dy < -DRAG_THRESHOLD) {
               expand();
             } else {
               Animated.spring(translateY, {
-                toValue: panelHeight,
+                toValue: startH,
                 useNativeDriver: true,
               }).start();
             }
-          } else if (panelState !== 'recording') {
-            if (isResizing || gestureState.dy < -DRAG_THRESHOLD) {
-              // Commit the new height
+          } else if (currentPanelState !== 'recording') {
+            const potentialHeight = startH - gestureState.dy;
+            
+            if (potentialHeight < MIN_PANEL_HEIGHT && (MIN_PANEL_HEIGHT - potentialHeight) > DRAG_THRESHOLD) {
+               // Dragged significantly below MIN height -> Close/Cancel
+               handleCancel();
+            } else {
+              // Commit the new height (clamped)
               const newHeight = Math.min(
                 MAX_PANEL_HEIGHT,
-                Math.max(MIN_PANEL_HEIGHT, panelHeight - gestureState.dy)
+                Math.max(MIN_PANEL_HEIGHT, potentialHeight)
               );
               setPanelHeight(newHeight);
               setTempHeight(newHeight);
-            } else if (gestureState.dy > DRAG_THRESHOLD) {
-              handleCancel();
-            } else {
+              
+              // Snap back to 0 translation (in case we were slightly in collapse territory but not enough to close)
               Animated.spring(translateY, {
                 toValue: 0,
                 useNativeDriver: true,
@@ -237,8 +297,22 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
     const isRecording = panelState === 'recording' || isListening;
     const isConfirming = panelState === 'confirming';
 
+    // Debug: Log transcription value
+    if (transcription) {
+      console.log('[SpeechPanel] Current transcription:', transcription);
+    }
+
     // Use tempHeight during resize for smooth feedback, otherwise use panelHeight
     const currentHeight = isResizing ? tempHeight : panelHeight;
+
+    // Calculate transcription box height explicitly
+    // Panel height - (drag handle + margins + padding + confirm buttons if visible)
+    // Drag handle area: ~50px
+    // Margins/Padding: ~40px
+    // Confirm buttons: ~80px (only when confirming)
+    const transcriptionBoxHeight = isConfirming
+      ? currentHeight - 170
+      : currentHeight - 90;
 
     return (
       <Animated.View
@@ -271,55 +345,52 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
 
         {isExpanded && (
           <View style={styles.content}>
-            {/* Mic Button - Tap to toggle recording */}
-            <Pressable onPress={handleMicPress} disabled={false}>
-              <Animated.View
-                style={[
-                  styles.micButton,
-                  isRecording && styles.micButtonRecording,
-                  { transform: [{ scale: micScale }] },
-                ]}
+            {/* Transcription Box - Contains text AND mic overlay */}
+            <View style={[
+              styles.transcriptionOverlayContainer,
+              { height: transcriptionBoxHeight },
+              isConfirming && { borderWidth: 2, borderColor: theme.colors.primary }
+            ]}>
+              <ScrollView
+                style={styles.transcriptionScrollView}
+                contentContainerStyle={styles.transcriptionScrollContent}
+                showsVerticalScrollIndicator={true}
               >
-                <Ionicons
-                  name={isRecording ? 'stop' : 'mic'}
-                  size={36}
-                  color={isRecording ? theme.colors.textInverse : theme.colors.text}
-                />
-              </Animated.View>
-            </Pressable>
+                {error ? (
+                  <Text style={styles.errorText}>{error}</Text>
+                ) : transcription && transcription.length > 0 ? (
+                  <Text style={styles.transcriptionOverlayText}>{transcription}</Text>
+                ) : isRecording ? (
+                  <Text style={styles.placeholderTextOverlay}>Listening...</Text>
+                ) : (
+                  <Text style={styles.placeholderTextOverlay}>Tap the mic to speak</Text>
+                )}
+              </ScrollView>
 
-            {/* Recording status text */}
-            <Text style={styles.statusText}>
-              {isRecording ? 'Tap to stop' : 'Tap to speak'}
-            </Text>
-
-            {/* Waveform Animation */}
-            <View style={styles.waveformContainer}>
-              <WaveformAnimation
-                isActive={isRecording}
-                color={isRecording ? theme.colors.recording : theme.colors.waveform}
-              />
+              {/* Mic Button Overlay - Visible when idle or recording */}
+              {!isConfirming && (
+                <Pressable onPress={handleMicPress} disabled={false} style={styles.micButtonWrapper}>
+                  <Animated.View
+                    style={[
+                      styles.micButton,
+                      isRecording && styles.micButtonTransparent,
+                      { transform: [{ scale: micScale }] },
+                    ]}
+                  >
+                    <Ionicons
+                      name="mic"
+                      size={36}
+                      color={theme.colors.text}
+                    />
+                  </Animated.View>
+                </Pressable>
+              )}
             </View>
 
-            {/* Transcription Display */}
-            <ScrollView
-              style={styles.transcriptionContainer}
-              contentContainerStyle={styles.transcriptionContent}
-            >
-              {error ? (
-                <Text style={styles.errorText}>{error}</Text>
-              ) : transcription ? (
-                <Text style={styles.transcriptionText}>{transcription}</Text>
-              ) : isRecording ? (
-                <Text style={styles.placeholderText}>Listening...</Text>
-              ) : (
-                <Text style={styles.placeholderText}>Tap the mic to speak</Text>
-              )}
-            </ScrollView>
-
-            {/* Confirm/Cancel Buttons (only show when not recording and has transcription) */}
-            {!isRecording && transcription.trim() && (
+            {/* Confirm/Cancel Buttons (only show when confirming) */}
+            {isConfirming && (
               <View style={styles.buttonContainer}>
+                {/* Cancel Button */}
                 <Pressable
                   style={({ pressed }) => [
                     styles.actionButton,
@@ -330,12 +401,12 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
                 >
                   <Ionicons
                     name="close-circle"
-                    size={24}
+                    size={36}
                     color={theme.colors.error}
                   />
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
                 </Pressable>
 
+                {/* Confirm Button */}
                 <Pressable
                   style={({ pressed }) => [
                     styles.actionButton,
@@ -346,10 +417,9 @@ export const SpeechPanel = forwardRef<SpeechPanelRef, SpeechPanelProps>(
                 >
                   <Ionicons
                     name="checkmark-circle"
-                    size={24}
+                    size={36}
                     color={theme.colors.textInverse}
                   />
-                  <Text style={styles.confirmButtonText}>Confirm</Text>
                 </Pressable>
               </View>
             )}
@@ -419,30 +489,69 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     paddingHorizontal: theme.spacing.lg,
+    paddingBottom: theme.spacing.sm,
+  },
+  transcriptionOverlayContainer: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: theme.colors.backgroundSecondary,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+    overflow: 'hidden',
+  },
+  transcriptionScrollView: {
+    flex: 1,
+    width: '100%',
+  },
+  transcriptionScrollContent: {
+    paddingBottom: 120, // Add padding at bottom to avoid mic overlap
+    flexGrow: 1,
+  },
+  transcriptionOverlayText: {
+    ...theme.typography.body,
+    color: theme.colors.text,
+    textAlign: 'left',
+  },
+  placeholderTextOverlay: {
+    ...theme.typography.body,
+    color: theme.colors.textTertiary,
+    textAlign: 'left',
+    fontStyle: 'italic',
+  },
+  micButtonWrapper: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
   },
   micButton: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: theme.colors.background,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: theme.colors.border,
+    elevation: 4,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
   },
-  micButtonRecording: {
-    backgroundColor: theme.colors.recording,
-    borderColor: theme.colors.recordingLight,
-  },
-  statusText: {
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
-    marginTop: theme.spacing.xs,
+  micButtonTransparent: {
+    opacity: 0.5,
   },
   waveformContainer: {
     height: 50,
+    width: '100%',
     justifyContent: 'center',
-    marginTop: theme.spacing.sm,
   },
   transcriptionContainer: {
     flex: 1,

@@ -13,7 +13,7 @@ import { NativeSpeechToText } from './native/NativeSpeechToText';
 import { NativeTextToSpeech } from './native/NativeTextToSpeech';
 
 // ElevenLabs implementations
-import { ElevenLabsRESTSTT } from './elevenlabs/ElevenLabsRESTSTT';
+import { ElevenLabsLiveStreamSTT } from './elevenlabs/ElevenLabsLiveStreamSTT';
 import { ElevenLabsTextToSpeech } from './elevenlabs/ElevenLabsTextToSpeech';
 
 // Singleton instances
@@ -32,7 +32,7 @@ export function getSpeechToTextService(): ISpeechToTextService {
 
   switch (provider) {
     case 'elevenlabs':
-      sttService = new ElevenLabsRESTSTT();
+      sttService = new ElevenLabsLiveStreamSTT();
       break;
     case 'native':
     default:
