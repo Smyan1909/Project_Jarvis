@@ -29,7 +29,7 @@ export function ChatScreen() {
   const [input, setInput] = useState('');
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(SPEECH_CONFIG.autoPlayResponses);
   const { messages, isLoading, error, sendMessage } = useAgentStream();
-  const { isSpeaking, speak, stop: stopSpeaking } = useTextToSpeech();
+  const { isSpeaking, speak, stop: stopSpeaking, error: ttsError } = useTextToSpeech();
   const flatListRef = useRef<FlatList>(null);
   const speechPanelRef = useRef<SpeechPanelRef>(null);
   const insets = useSafeAreaInsets();
@@ -187,6 +187,13 @@ export function ChatScreen() {
         </View>
       )}
 
+      {/* TTS Error Banner */}
+      {ttsError && (
+        <View style={[styles.errorBanner, styles.ttsErrorBanner]}>
+          <Text style={styles.errorText}>TTS: {ttsError}</Text>
+        </View>
+      )}
+
       {/* Messages List */}
       <FlatList
         ref={flatListRef}
@@ -307,6 +314,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.error,
     paddingVertical: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
+  },
+  ttsErrorBanner: {
+    backgroundColor: theme.colors.warning,
   },
   errorText: {
     ...theme.typography.bodySmall,

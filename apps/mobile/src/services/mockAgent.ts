@@ -3,16 +3,13 @@
  * Provides simulated AI responses for demo mode without requiring a backend.
  */
 
+// Track if this is the first message in the session
+let isFirstMessage = true;
+
 // Collection of mock responses that simulate an AI assistant
 const MOCK_RESPONSES: Record<string, string> = {
-  greeting: `Hello! I'm Jarvis, your AI assistant. I'm running in demo mode right now, which means I'm using pre-configured responses rather than connecting to a real AI backend.
-
-Here are some things you can try:
-- Ask me "What can you do?"
-- Say "Tell me a joke"
-- Ask "How does this app work?"
-
-How can I help you today?`,
+  // Default Jarvis greeting - spoken on first message
+  greeting: `Hi, this is Jarvis. How can I help you?`,
 
   capabilities: `I'm designed to be a helpful AI assistant that can:
 
@@ -75,6 +72,12 @@ Or switch to the full backend by disabling demo mode in Settings.`,
  * Determines which mock response to use based on user input
  */
 function selectResponse(userMessage: string): string {
+  // First message always gets the Jarvis greeting
+  if (isFirstMessage) {
+    isFirstMessage = false;
+    return MOCK_RESPONSES.greeting;
+  }
+
   const lowerMessage = userMessage.toLowerCase().trim();
 
   // Check for greetings
@@ -164,4 +167,12 @@ export function streamMockResponse(
       clearTimeout(timeoutId);
     }
   };
+}
+
+/**
+ * Reset the mock agent state.
+ * Useful for testing or when the user starts a new conversation.
+ */
+export function resetMockAgent(): void {
+  isFirstMessage = true;
 }

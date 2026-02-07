@@ -26,12 +26,17 @@ export const SPEECH_CONFIG = {
 
   // ElevenLabs provider settings (used when provider === 'elevenlabs')
   elevenLabs: {
+    // API key for direct ElevenLabs calls (when backend unavailable)
+    apiKey: process.env.EXPO_PUBLIC_ELEVENLABS_API_KEY || '',
     // Default voice ID - get from ElevenLabs dashboard
-    defaultVoiceId: process.env.EXPO_PUBLIC_ELEVENLABS_VOICE_ID || '',
+    // Fallback to "Sarah" voice if not configured
+    defaultVoiceId: process.env.EXPO_PUBLIC_ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
     // TTS model to use
     model: 'eleven_multilingual_v2',
     // API endpoint (proxied through backend for security)
     apiEndpoint: `${API_URL}/speech`,
+    // Direct ElevenLabs API URL (for demo/offline mode)
+    directApiUrl: 'https://api.elevenlabs.io/v1',
   },
 
   // Auto-play TTS when assistant responds
