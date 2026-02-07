@@ -470,4 +470,80 @@ describe('AuthService', () => {
       expect(user).toBeNull();
     });
   });
+
+  // ===========================================================================
+  // resetPassword() tests
+  // ===========================================================================
+
+  describe('resetPassword()', () => {
+    it('should reset password and invalidate all refresh tokens', async () => {
+      const mockUser = createMockUser();
+
+      vi.mocked(mockUserRepo.findById).mockResolvedValue(mockUser);
+      vi.mocked(mockUserRepo.update).mockResolvedValue(mockUser);
+      vi.mocked(mockRefreshTokenRepo.deleteAllForUser).mockResolvedValue(2);
+
+      await authService.resetPassword('user-123', 'newpassword123');
+
+      // Should update password hash
+      expect(mockUserRepo.update).toHaveBeenCalledWith(
+        'user-123',
+        expect.objectContaining({
+          passwordHash: expect.stringMatching(/^\$2[aby]\$/), // bcrypt hash
+        })
+      );
+
+      // CRITICAL: Should invalidate all refresh tokens
+      expect(mockRefreshTokenRepo.deleteAllForUser).toHaveBeenCalledWith('user-123');
+    });
+
+    it('should throw error for non-existent user', async () => {
+      vi.mocked(mockUserRepo.findById).mockResolvedValue(null);
+
+      await expect(
+        authService.resetPassword('nonexistent', 'newpassword123')
+      ).rejects.toThrow(/not found/i);
+    });
+
+    it('should throw error for invalid new password', async () => {
+      const mockUser = createMockUser();
+      vi.mocked(mockUserRepo.findById).mockResolvedValue(mockUser);
+
+      await expect(
+        authService.resetPassword('user-123', 'short1')
+      ).rejects.toThrow(/at least 8 characters/i);
+    });
+
+    it('should throw error for password without letter and number', async () => {
+      const mockUser = createMockUser();
+      vi.mocked(mockUserRepo.findById).mockResolvedValue(mockUser);
+
+      await expect(
+        authService.resetPassword('user-123', 'onlyletters')
+      ).rejects.toThrow(/letter and one number/i);
+    });
+
+    it('should allow login with new password after reset', async () => {
+      const mockUser = createMockUser();
+      const newPassword = 'newpassword123';
+      const newHash = await createRealHash(newPassword);
+      const updatedUser = { ...mockUser, passwordHash: newHash };
+
+      // Reset password
+      vi.mocked(mockUserRepo.findById).mockResolvedValue(mockUser);
+      vi.mocked(mockUserRepo.update).mockResolvedValue(updatedUser);
+      vi.mocked(mockRefreshTokenRepo.deleteAllForUser).mockResolvedValue(1);
+
+      await authService.resetPassword('user-123', newPassword);
+
+      // Try to login with new password
+      vi.mocked(mockUserRepo.findByEmail).mockResolvedValue(updatedUser);
+      vi.mocked(mockRefreshTokenRepo.create).mockResolvedValue(createMockRefreshToken());
+
+      const result = await authService.login(mockUser.email, newPassword);
+
+      expect(result.user.id).toBe(mockUser.id);
+      expect(result.tokens.accessToken).toBeDefined();
+    });
+  });
 });

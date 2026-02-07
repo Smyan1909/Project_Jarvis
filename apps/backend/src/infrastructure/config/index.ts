@@ -28,6 +28,10 @@ const envSchema = z.object({
     // LLM (optional - can use user secrets)
     OPENAI_API_KEY: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
+
+    // Monitoring Agent (Composio integration)
+    COMPOSIO_WEBHOOK_URL: z.string().url().optional(),
+    COMPOSIO_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
