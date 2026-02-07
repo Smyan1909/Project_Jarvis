@@ -60,3 +60,46 @@ export const PaginationRequestSchema = z.object({
 });
 
 export type PaginationRequest = z.infer<typeof PaginationRequestSchema>;
+
+// =============================================================================
+// Auth Requests
+// =============================================================================
+
+/**
+ * Register a new user
+ */
+export const RegisterRequestSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  displayName: z.string().max(255).optional(),
+});
+
+export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
+
+/**
+ * Login with email and password
+ */
+export const LoginRequestSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+export type LoginRequest = z.infer<typeof LoginRequestSchema>;
+
+/**
+ * Refresh access token using refresh token
+ */
+export const RefreshTokenRequestSchema = z.object({
+  refreshToken: z.string().min(1, 'Refresh token is required'),
+});
+
+export type RefreshTokenRequest = z.infer<typeof RefreshTokenRequestSchema>;
+
+/**
+ * Logout (invalidate refresh token)
+ */
+export const LogoutRequestSchema = z.object({
+  refreshToken: z.string().min(1, 'Refresh token is required'),
+});
+
+export type LogoutRequest = z.infer<typeof LogoutRequestSchema>;
