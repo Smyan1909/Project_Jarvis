@@ -49,9 +49,68 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
   ],
 
   // Coding agent - programming and file operations
+  // This agent has extensive tool access for end-to-end software development
   coding: [
     // Memory (read-only)
     'recall',
+    
+    // === MCP Tools - Claude Code (Primary) ===
+    // The most powerful tool - spawns Claude CLI with full system access
+    'unified__claude_code',
+    
+    // === MCP Tools - Terminal ===
+    // Direct shell command execution for builds, tests, etc.
+    'unified__terminal_execute',
+    'unified__terminal_cwd',
+    
+    // === MCP Tools - Filesystem ===
+    // Direct file operations (alternative to Claude Code for simple reads)
+    'unified__fs_read',
+    'unified__fs_write',
+    'unified__fs_delete',
+    'unified__fs_list',
+    'unified__fs_mkdir',
+    
+    // === MCP Tools - Browser Automation (Playwright) ===
+    // Navigation
+    'unified__browser.navigate',
+    'unified__browser.back',
+    'unified__browser.forward',
+    'unified__browser.reload',
+    'unified__browser.close',
+    // Interaction
+    'unified__browser.click',
+    'unified__browser.type',
+    'unified__browser.hover',
+    'unified__browser.select',
+    'unified__browser.key',
+    'unified__browser.drag',
+    'unified__browser.upload',
+    'unified__browser.fill_form',
+    'unified__browser.scroll',
+    // Inspection
+    'unified__browser.snapshot',
+    'unified__browser.screenshot',
+    'unified__browser.console',
+    'unified__browser.network',
+    'unified__browser.evaluate',
+    'unified__browser.html',
+    'unified__browser.url',
+    
+    // === MCP Meta Tools ===
+    // For discovering and executing additional tools
+    'unified__list_available_tools',
+    'unified__get_tool_schema',
+    'unified__execute_tool',
+    'unified__suggest_tools',
+    
+    // === Composio Tools - GitHub ===
+    // OAuth-managed GitHub integration
+    'COMPOSIO_SEARCH_TOOLS',
+    'COMPOSIO_MANAGE_CONNECTIONS',
+    'COMPOSIO_MULTI_EXECUTE_TOOL',
+    
+    // === Legacy Local Tools (for backwards compatibility) ===
     // File operations
     'file_read',
     'file_write',
@@ -157,13 +216,14 @@ Use this versatility to handle tasks that don't fit other specialized agents.`,
 - Comparing multiple sources
 Focus on gathering accurate, comprehensive information.`,
 
-  coding: `You are a coding specialist capable of:
-- Reading and writing code files
-- Executing code
-- Analyzing code structure and quality
-- Formatting and linting code
-- Git operations
-Focus on writing clean, efficient, well-documented code.`,
+  coding: `You are an autonomous end-to-end coding agent capable of:
+- Full file system access via Claude Code (create, edit, delete files)
+- Terminal command execution (builds, tests, package management)
+- Git operations (commit, branch, merge, push with confirmation)
+- Browser automation via Playwright (navigation, interaction, inspection)
+- GitHub integration via Composio (issues, PRs, repo management)
+- Complex multi-file refactoring and code generation
+You operate with high autonomy - complete tasks independently and verify with tests.`,
 
   scheduling: `You are a scheduling specialist capable of:
 - Managing calendar events

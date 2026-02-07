@@ -118,11 +118,22 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
           shape[key] = convertParameterToZod(nestedParam);
         }
 
-        // Use strict() to set additionalProperties: false - required by OpenAI
-        schema = z.object(shape).strict();
+        // If additionalProperties is true, use passthrough() to allow extra fields
+        // Otherwise use strict() to set additionalProperties: false (required by OpenAI)
+        if (param.additionalProperties === true) {
+          schema = z.object(shape).passthrough();
+        } else {
+          schema = z.object(shape).strict();
+        }
+      } else if (param.additionalProperties === true) {
+        // For objects with no defined properties but additionalProperties: true
+        // Use z.object({}).passthrough() to allow any key-value pairs (dynamic object)
+        // Note: z.record() generates "additionalProperties": {} which OpenAI rejects
+        // z.object({}).passthrough() generates "additionalProperties": true which works
+        schema = z.object({}).passthrough();
       } else {
-        // For objects without defined properties, don't use object type at all
-        // Just use a string that will contain JSON
+        // For objects without defined properties or additionalProperties
+        // Use a string that will contain JSON (legacy fallback)
         schema = z.string().describe('JSON string representing the object');
       }
       break;

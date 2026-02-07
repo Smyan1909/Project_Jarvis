@@ -170,6 +170,7 @@ function convertSchemaProperty(schema: Record<string, unknown>): ToolParameter {
     case 'object': {
       const properties = schema.properties as Record<string, unknown> | undefined;
       const required = schema.required as string[] | undefined;
+      const additionalProperties = schema.additionalProperties as boolean | Record<string, unknown> | undefined;
 
       if (properties) {
         const convertedProps: Record<string, ToolParameter> = {};
@@ -181,6 +182,16 @@ function convertSchemaProperty(schema: Record<string, unknown>): ToolParameter {
           description,
           properties: convertedProps,
           required,
+          additionalProperties: additionalProperties === true ? true : undefined,
+        };
+      }
+
+      // For objects with no properties but additionalProperties: true (dynamic object)
+      if (additionalProperties === true) {
+        return {
+          type: 'object',
+          description,
+          additionalProperties: true,
         };
       }
 

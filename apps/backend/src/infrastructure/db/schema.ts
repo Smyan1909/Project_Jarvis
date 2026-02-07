@@ -203,6 +203,71 @@ export const orchestratorStates = pgTable('orchestrator_states', {
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+// === Monitoring Agent Domain ===
+
+// Trigger subscriptions - maps Composio triggers to users
+export const triggerSubscriptions = pgTable('trigger_subscriptions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    triggerId: varchar('trigger_id', { length: 255 }).notNull().unique(),
+    triggerType: varchar('trigger_type', { length: 100 }).notNull(), // e.g., 'GITHUB_ISSUE_ASSIGNED_EVENT', 'SLACK_RECEIVE_MESSAGE'
+    toolkit: varchar('toolkit', { length: 50 }).notNull(), // 'GITHUB' | 'SLACK'
+    config: jsonb('config').notNull().default({}), // Trigger-specific config (repo, channel, etc.)
+    autoStart: boolean('auto_start').notNull().default(false), // Whether to auto-start tasks
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => [
+    index('trigger_subscriptions_user_id_idx').on(table.userId),
+]);
+
+// Slack priority contacts - for determining message importance
+export const slackPriorityContacts = pgTable('slack_priority_contacts', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    slackUserId: varchar('slack_user_id', { length: 100 }).notNull(),
+    slackUserName: varchar('slack_user_name', { length: 255 }),
+    priority: varchar('priority', { length: 20 }).notNull().default('normal'), // 'high' | 'normal'
+    autoStart: boolean('auto_start').notNull().default(false), // Override trigger's autoStart for this contact
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+    uniqueIndex('slack_priority_contacts_user_slack_idx').on(table.userId, table.slackUserId),
+]);
+
+// Monitored events - log of all trigger events received
+export const monitoredEvents = pgTable('monitored_events', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    subscriptionId: uuid('subscription_id').references(() => triggerSubscriptions.id, { onDelete: 'set null' }),
+    triggerType: varchar('trigger_type', { length: 100 }).notNull(),
+    toolkit: varchar('toolkit', { length: 50 }).notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('pending'), // 'pending' | 'approved' | 'rejected' | 'auto_started' | 'in_progress' | 'completed' | 'failed'
+    payload: jsonb('payload').notNull(), // Raw trigger payload from Composio
+    parsedContext: jsonb('parsed_context').notNull(), // Extracted: title, summary, sender, sourceUrl, etc.
+    orchestratorRunId: uuid('orchestrator_run_id'), // If an orchestrator run was started
+    sourceReplyId: varchar('source_reply_id', { length: 255 }), // ID of reply sent to GitHub/Slack
+    sourceReplyContent: text('source_reply_content'), // Content of the reply sent
+    requiresApproval: boolean('requires_approval').notNull().default(true),
+    receivedAt: timestamp('received_at').defaultNow().notNull(),
+    processedAt: timestamp('processed_at'),
+    approvedAt: timestamp('approved_at'),
+}, (table) => [
+    index('monitored_events_user_received_idx').on(table.userId, table.receivedAt),
+    index('monitored_events_status_idx').on(table.status),
+]);
+
+// Push notification tokens for Expo
+export const pushTokens = pgTable('push_tokens', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    token: varchar('token', { length: 500 }).notNull(),
+    platform: varchar('platform', { length: 20 }).notNull(), // 'ios' | 'android'
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => [
+    uniqueIndex('push_tokens_user_token_idx').on(table.userId, table.token),
+]);
+
 // === MCP Domain ===
 // Global MCP server configurations (admin-managed)
 export const mcpServers = pgTable('mcp_servers', {
