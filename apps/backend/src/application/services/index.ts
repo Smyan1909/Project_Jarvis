@@ -2,6 +2,9 @@
 // Application Services - Barrel Export
 // =============================================================================
 
+// Authentication
+export * from './auth-service.js';
+
 // LLM Routing
 export * from './LLMRouterService.js';
 
