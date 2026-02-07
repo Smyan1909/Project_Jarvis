@@ -18,15 +18,6 @@
         "NSSpeechRecognitionUsageDescription": "Allow Jarvis to use speech recognition for voice input.",
         "NSMicrophoneUsageDescription": "Allow Jarvis to use the microphone for voice input."
       }
-    },
-    "plugins": [
-      [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "Allow Jarvis to use the microphone for voice input.",
-          "speechRecognitionPermission": "Allow Jarvis to use speech recognition."
-        }
-      ]
-    ]
+    }
   }
 }
