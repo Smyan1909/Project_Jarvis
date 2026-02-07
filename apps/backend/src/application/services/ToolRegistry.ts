@@ -6,6 +6,7 @@
 
 import type { ToolDefinition, ToolResult } from '@project-jarvis/shared-types';
 import type { ToolInvokerPort } from '../../ports/ToolInvokerPort.js';
+import type { ToolPermissionRepository } from '../../adapters/storage/tool-permission-repository.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 
 /**
@@ -55,6 +56,16 @@ interface RegisteredTool {
 export class ToolRegistry implements ToolInvokerPort {
   private tools: Map<string, RegisteredTool> = new Map();
   private log = logger.child({ service: 'ToolRegistry' });
+  private permissionRepository?: ToolPermissionRepository;
+
+  /**
+   * Set the permission repository for user-level access control
+   * When set, hasPermission() will check the database for explicit denials
+   */
+  setPermissionRepository(repo: ToolPermissionRepository): void {
+    this.permissionRepository = repo;
+    this.log.info('Permission repository configured');
+  }
 
   /**
    * Register a new tool
@@ -97,7 +108,7 @@ export class ToolRegistry implements ToolInvokerPort {
    * @param agentType - Optional: Filter tools by agent type (e.g., 'orchestrator', 'general')
    */
   async getTools(userId: string, agentType?: string): Promise<ToolDefinition[]> {
-    const availableTools: ToolDefinition[] = [];
+    const candidateTools: ToolDefinition[] = [];
 
     for (const tool of this.tools.values()) {
       // If agent type is specified and tool has restrictions, check if allowed
@@ -105,19 +116,36 @@ export class ToolRegistry implements ToolInvokerPort {
         continue;
       }
 
-      // TODO: Add user-level permission checks here
-      // e.g., check if user has access to premium tools
+      candidateTools.push(tool.definition);
+    }
 
-      availableTools.push(tool.definition);
+    // If permission repository is configured, filter by user permissions
+    if (this.permissionRepository && candidateTools.length > 0) {
+      const toolIds = candidateTools.map((t) => t.id);
+      const permissions = await this.permissionRepository.hasPermissions(userId, toolIds);
+
+      const availableTools = candidateTools.filter((tool) => {
+        const permitted = permissions.get(tool.id);
+        return permitted !== false; // Allow if true or undefined (default)
+      });
+
+      this.log.debug('Tools retrieved with permission filtering', {
+        userId,
+        agentType: agentType || 'all',
+        candidateCount: candidateTools.length,
+        availableCount: availableTools.length,
+      });
+
+      return availableTools;
     }
 
     this.log.debug('Tools retrieved', {
       userId,
       agentType: agentType || 'all',
-      count: availableTools.length,
+      count: candidateTools.length,
     });
 
-    return availableTools;
+    return candidateTools;
   }
 
   /**
@@ -172,6 +200,11 @@ export class ToolRegistry implements ToolInvokerPort {
 
   /**
    * Check if a user has permission to use a specific tool
+   *
+   * Permission model:
+   * 1. Tool must be registered in the registry
+   * 2. If permission repository is configured, check for explicit denials
+   * 3. Default: all registered tools are available
    */
   async hasPermission(userId: string, toolId: string): Promise<boolean> {
     const tool = this.tools.get(toolId);
@@ -179,8 +212,15 @@ export class ToolRegistry implements ToolInvokerPort {
       return false;
     }
 
-    // TODO: Implement user-level permission checks
-    // For now, all registered tools are available to all users
+    // If permission repository is configured, check database
+    if (this.permissionRepository) {
+      const permitted = await this.permissionRepository.hasPermission(userId, toolId);
+      if (!permitted) {
+        this.log.debug('Tool access denied by permission check', { userId, toolId });
+        return false;
+      }
+    }
+
     return true;
   }
 
