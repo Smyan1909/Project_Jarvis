@@ -5,7 +5,7 @@
 You are responsible for the **React Native mobile app** of Project Jarvis:
 - Navigation and screen structure
 - Authentication flow (JWT + refresh tokens)
-- Real-time chat experience with WebSocket streaming
+- Real-time chat experience with SSE (Server-Sent Events) streaming
 - Settings and secrets management UI
 - Tool visualization and history
 - Media upload (audio/images)
@@ -15,9 +15,69 @@ You are responsible for the **React Native mobile app** of Project Jarvis:
 - **Framework:** React Native with Expo (SDK 54)
 - **Navigation:** React Navigation v6
 - **State Management:** React Context + useReducer (or Zustand)
-- **Networking:** Axios for REST, native WebSocket
+- **Networking:** Axios for REST, EventSource for SSE streaming
 - **Storage:** expo-secure-store for tokens, AsyncStorage for preferences
 - **UI:** Custom components with a consistent design system
+
+---
+
+## Backend Integration Notes
+
+> **Last Updated:** February 2026
+
+### Important Changes from Original Plan
+
+1. **Real-Time Streaming**: The backend uses **SSE (Server-Sent Events)** instead of WebSocket
+   - Simpler implementation, no socket.io needed
+   - Uses native `EventSource` or `fetch` with streaming
+   - Event format documented below
+
+2. **Framework**: Backend uses **Hono** instead of Express (no impact on frontend)
+
+3. **Auth**: Currently uses placeholder auth - accepts any token with anonymous user ID
+   - Full JWT validation coming soon
+
+### Current Backend API
+
+**Base URL:** `http://localhost:3000/api/v1`
+
+| Endpoint | Method | Description | Status |
+|----------|--------|-------------|--------|
+| `/orchestrator/run` | POST | Start agent run (SSE stream) | **WORKING** |
+| `/orchestrator/runs` | GET | List user's runs | NOT IMPLEMENTED |
+| `/orchestrator/run/:id/messages` | GET | Get run messages | NOT IMPLEMENTED |
+| `/health` | GET | Health check | **WORKING** |
+
+### SSE Event Types
+
+```typescript
+type OrchestratorEventType =
+  | 'orchestrator.started'      // Run started
+  | 'orchestrator.thinking'     // LLM processing  
+  | 'orchestrator.tool_call'    // Tool invocation
+  | 'orchestrator.tool_result'  // Tool result
+  | 'orchestrator.response'     // Partial response
+  | 'orchestrator.agent_spawned'// Sub-agent created
+  | 'orchestrator.agent_update' // Sub-agent status
+  | 'orchestrator.complete'     // Run completed (final response here)
+  | 'orchestrator.error'        // Error occurred
+```
+
+### SSE Response Format
+
+Each line is prefixed with `data: ` followed by JSON:
+
+```
+data: {"type":"orchestrator.started","runId":"abc123","timestamp":"..."}
+
+data: {"type":"orchestrator.tool_call","toolName":"get_current_time","input":{}}
+
+data: {"type":"orchestrator.tool_result","toolName":"get_current_time","result":{"datetime":"..."}}
+
+data: {"type":"orchestrator.complete","response":"The current time is...","usage":{"totalTokens":150}}
+```
+
+---
 
 ## Weekly Breakdown
 
@@ -559,178 +619,114 @@ export const secretsApi = {
 };
 ```
 
-### Day 4-5: WebSocket Hook
+### Day 4-5: SSE Streaming Hook
 
-**Create `apps/mobile/src/services/websocket.ts`:**
+> **Note:** The backend uses SSE (Server-Sent Events) instead of WebSocket. This simplifies the implementation.
+
+**Create `apps/mobile/src/services/sse.ts`:**
 ```typescript
 import { getAccessToken } from './api';
-import { WS_URL } from '../config';
+import { API_URL } from '../config';
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
+// Orchestrator event types (from backend)
+export type OrchestratorEvent =
+  | { type: 'orchestrator.started'; runId: string; timestamp: string }
+  | { type: 'orchestrator.thinking'; content?: string }
+  | { type: 'orchestrator.tool_call'; toolName: string; input: unknown }
+  | { type: 'orchestrator.tool_result'; toolName: string; result: unknown; success: boolean }
+  | { type: 'orchestrator.response'; content: string }
+  | { type: 'orchestrator.agent_spawned'; agentId: string; scope: string }
+  | { type: 'orchestrator.agent_update'; agentId: string; status: string }
+  | { type: 'orchestrator.complete'; response: string; usage?: { totalTokens: number; totalCost?: number } }
+  | { type: 'orchestrator.error'; error: string; code?: string };
 
-export interface WebSocketManager {
-  connect: () => Promise<void>;
-  disconnect: () => void;
-  subscribe: (runId: string, callback: (event: AgentEvent) => void) => () => void;
-  getStatus: () => ConnectionStatus;
-  onStatusChange: (callback: (status: ConnectionStatus) => void) => () => void;
+interface StreamOptions {
+  onEvent: (event: OrchestratorEvent) => void;
+  onError?: (error: Error) => void;
+  onComplete?: () => void;
 }
 
-// Agent event types (from shared-types)
-export type AgentEvent =
-  | { type: 'agent.token'; token: string }
-  | { type: 'agent.tool_call'; toolId: string; toolName: string; input: unknown }
-  | { type: 'agent.tool_result'; toolId: string; output: unknown; success: boolean }
-  | { type: 'agent.final'; content: string; usage?: { totalTokens: number; totalCost: number } }
-  | { type: 'agent.error'; message: string; code?: string }
-  | { type: 'agent.status'; status: 'running' | 'completed' | 'failed' | 'cancelled' };
+/**
+ * Start an orchestrator run with SSE streaming
+ */
+export async function startOrchestratorRun(
+  input: string,
+  options: StreamOptions
+): Promise<AbortController> {
+  const token = await getAccessToken();
+  const controller = new AbortController();
 
-export function createWebSocketManager(): WebSocketManager {
-  let socket: WebSocket | null = null;
-  let status: ConnectionStatus = 'disconnected';
-  let reconnectTimeout: NodeJS.Timeout | null = null;
-  let reconnectAttempts = 0;
-  const maxReconnectAttempts = 5;
-  
-  const statusListeners = new Set<(status: ConnectionStatus) => void>();
-  const runListeners = new Map<string, Set<(event: AgentEvent) => void>>();
-
-  function setStatus(newStatus: ConnectionStatus) {
-    status = newStatus;
-    statusListeners.forEach(cb => cb(status));
-  }
-
-  async function connect(): Promise<void> {
-    if (socket?.readyState === WebSocket.OPEN) {
-      return;
-    }
-
-    setStatus('connecting');
-
-    const token = await getAccessToken();
-    if (!token) {
-      setStatus('error');
-      throw new Error('No access token available');
-    }
-
-    return new Promise((resolve, reject) => {
-      socket = new WebSocket(WS_URL);
-
-      socket.onopen = () => {
-        // Authenticate
-        socket?.send(JSON.stringify({ type: 'auth', token }));
-      };
-
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          // Handle auth response
-          if (data.type === 'auth.success') {
-            setStatus('connected');
-            reconnectAttempts = 0;
-            resolve();
-            return;
-          }
-
-          if (data.type === 'auth.error') {
-            setStatus('error');
-            reject(new Error(data.message));
-            return;
-          }
-
-          // Handle run events
-          if (data.runId && runListeners.has(data.runId)) {
-            runListeners.get(data.runId)?.forEach(cb => cb(data.event));
-          }
-
-          // Handle global agent events (format: run:<runId>)
-          const runIdMatch = data.channel?.match(/^run:(.+)$/);
-          if (runIdMatch && runListeners.has(runIdMatch[1])) {
-            runListeners.get(runIdMatch[1])?.forEach(cb => cb(data.event));
-          }
-        } catch (e) {
-          console.error('WebSocket message parse error:', e);
-        }
-      };
-
-      socket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setStatus('error');
-      };
-
-      socket.onclose = () => {
-        setStatus('disconnected');
-        socket = null;
-
-        // Attempt reconnect
-        if (reconnectAttempts < maxReconnectAttempts) {
-          reconnectAttempts++;
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-          reconnectTimeout = setTimeout(() => {
-            connect().catch(console.error);
-          }, delay);
-        }
-      };
-    });
-  }
-
-  function disconnect() {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout);
-      reconnectTimeout = null;
-    }
-    reconnectAttempts = maxReconnectAttempts; // Prevent reconnect
-    socket?.close();
-    socket = null;
-    setStatus('disconnected');
-  }
-
-  function subscribe(runId: string, callback: (event: AgentEvent) => void): () => void {
-    if (!runListeners.has(runId)) {
-      runListeners.set(runId, new Set());
-    }
-    runListeners.get(runId)!.add(callback);
-
-    // Subscribe to run channel
-    socket?.send(JSON.stringify({ type: 'subscribe', channel: `run:${runId}` }));
-
-    return () => {
-      runListeners.get(runId)?.delete(callback);
-      if (runListeners.get(runId)?.size === 0) {
-        runListeners.delete(runId);
-        socket?.send(JSON.stringify({ type: 'unsubscribe', channel: `run:${runId}` }));
+  fetch(`${API_URL}/orchestrator/run`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ input }),
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ message: 'Request failed' }));
+        throw new Error(error.message || `HTTP ${response.status}`);
       }
-    };
-  }
 
-  function getStatus(): ConnectionStatus {
-    return status;
-  }
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
 
-  function onStatusChange(callback: (status: ConnectionStatus) => void): () => void {
-    statusListeners.add(callback);
-    return () => statusListeners.delete(callback);
-  }
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-  return {
-    connect,
-    disconnect,
-    subscribe,
-    getStatus,
-    onStatusChange,
-  };
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          options.onComplete?.();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Parse SSE lines
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              options.onEvent(data as OrchestratorEvent);
+            } catch (e) {
+              console.error('Failed to parse SSE event:', line);
+            }
+          }
+        }
+      }
+    })
+    .catch((error) => {
+      if (error.name !== 'AbortError') {
+        options.onError?.(error);
+      }
+    });
+
+  return controller;
 }
+```
 
-// Singleton instance
-export const wsManager = createWebSocketManager();
+**Legacy WebSocket Manager (if needed for future features):**
+
+If WebSocket is added later for other features, create `apps/mobile/src/services/websocket.ts`:
+```typescript
+// WebSocket implementation can be added here if needed for
+// real-time features beyond the orchestrator (e.g., notifications)
 ```
 
 **Create `apps/mobile/src/hooks/useAgentStream.ts`:**
 ```typescript
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { agentApi } from '../services/api';
-import { wsManager, AgentEvent } from '../services/websocket';
+import { useState, useCallback, useRef } from 'react';
+import { startOrchestratorRun, OrchestratorEvent } from '../services/sse';
 
 interface Message {
   id: string;
@@ -760,39 +756,24 @@ export function useAgentStream(): UseAgentStreamResult {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const currentRunIdRef = useRef<string | null>(null);
-  const streamingContentRef = useRef<string>('');
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Connect WebSocket on mount
-  useEffect(() => {
-    wsManager.connect().catch(console.error);
-    return () => {
-      // Don't disconnect on unmount - let it persist
-    };
-  }, []);
-
-  const handleEvent = useCallback((event: AgentEvent) => {
+  const handleEvent = useCallback((event: OrchestratorEvent) => {
     switch (event.type) {
-      case 'agent.token':
-        streamingContentRef.current += event.token;
-        setMessages(prev => {
-          const lastMessage = prev[prev.length - 1];
-          if (lastMessage?.isStreaming) {
-            return [
-              ...prev.slice(0, -1),
-              { ...lastMessage, content: streamingContentRef.current },
-            ];
-          }
-          return prev;
-        });
+      case 'orchestrator.started':
+        // Run started, nothing to display yet
         break;
 
-      case 'agent.tool_call':
+      case 'orchestrator.thinking':
+        // Optional: show thinking indicator
+        break;
+
+      case 'orchestrator.tool_call':
         setMessages(prev => {
           const lastMessage = prev[prev.length - 1];
           if (lastMessage?.role === 'assistant') {
             const toolCall: ToolCallInfo = {
-              id: event.toolId,
+              id: `tool-${Date.now()}`,
               name: event.toolName,
               input: event.input,
               status: 'pending',
@@ -809,13 +790,13 @@ export function useAgentStream(): UseAgentStreamResult {
         });
         break;
 
-      case 'agent.tool_result':
+      case 'orchestrator.tool_result':
         setMessages(prev => {
           const lastMessage = prev[prev.length - 1];
           if (lastMessage?.toolCalls) {
             const updatedToolCalls = lastMessage.toolCalls.map(tc =>
-              tc.id === event.toolId
-                ? { ...tc, output: event.output, status: event.success ? 'success' : 'error' as const }
+              tc.name === event.toolName && tc.status === 'pending'
+                ? { ...tc, output: event.result, status: event.success ? 'success' : 'error' as const }
                 : tc
             );
             return [
@@ -827,13 +808,28 @@ export function useAgentStream(): UseAgentStreamResult {
         });
         break;
 
-      case 'agent.final':
+      case 'orchestrator.response':
+        // Partial response - update streaming content
         setMessages(prev => {
           const lastMessage = prev[prev.length - 1];
           if (lastMessage?.isStreaming) {
             return [
               ...prev.slice(0, -1),
-              { ...lastMessage, content: event.content, isStreaming: false },
+              { ...lastMessage, content: event.content },
+            ];
+          }
+          return prev;
+        });
+        break;
+
+      case 'orchestrator.complete':
+        // Final response
+        setMessages(prev => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage?.isStreaming) {
+            return [
+              ...prev.slice(0, -1),
+              { ...lastMessage, content: event.response, isStreaming: false },
             ];
           }
           return prev;
@@ -841,25 +837,24 @@ export function useAgentStream(): UseAgentStreamResult {
         setIsLoading(false);
         break;
 
-      case 'agent.error':
-        setError(event.message);
+      case 'orchestrator.error':
+        setError(event.error);
         setIsLoading(false);
         setMessages(prev => {
           const lastMessage = prev[prev.length - 1];
           if (lastMessage?.isStreaming) {
             return [
               ...prev.slice(0, -1),
-              { ...lastMessage, isStreaming: false },
+              { ...lastMessage, isStreaming: false, content: 'Error: ' + event.error },
             ];
           }
           return prev;
         });
         break;
 
-      case 'agent.status':
-        if (event.status === 'completed' || event.status === 'failed' || event.status === 'cancelled') {
-          setIsLoading(false);
-        }
+      case 'orchestrator.agent_spawned':
+      case 'orchestrator.agent_update':
+        // Optional: display sub-agent activity
         break;
     }
   }, []);
@@ -867,7 +862,6 @@ export function useAgentStream(): UseAgentStreamResult {
   const sendMessage = useCallback(async (content: string) => {
     setError(null);
     setIsLoading(true);
-    streamingContentRef.current = '';
 
     // Add user message
     const userMessage: Message = {
@@ -887,17 +881,19 @@ export function useAgentStream(): UseAgentStreamResult {
     setMessages(prev => [...prev, assistantMessage]);
 
     try {
-      // Start the run
-      const response = await agentApi.startRun(content);
-      const runId = response.data.data.id;
-      currentRunIdRef.current = runId;
-
-      // Subscribe to events
-      const unsubscribe = wsManager.subscribe(runId, handleEvent);
-
-      // Store unsubscribe for cleanup
-      // In a real app, you'd want to track this better
-      return () => unsubscribe();
+      // Start the SSE stream
+      const controller = await startOrchestratorRun(content, {
+        onEvent: handleEvent,
+        onError: (err) => {
+          setError(err.message || 'Failed to connect');
+          setIsLoading(false);
+        },
+        onComplete: () => {
+          setIsLoading(false);
+        },
+      });
+      
+      abortControllerRef.current = controller;
     } catch (err: any) {
       setError(err.message || 'Failed to start conversation');
       setIsLoading(false);
@@ -907,10 +903,18 @@ export function useAgentStream(): UseAgentStreamResult {
   }, [handleEvent]);
 
   const cancelRun = useCallback(() => {
-    if (currentRunIdRef.current) {
-      agentApi.cancelRun(currentRunIdRef.current).catch(console.error);
-      setIsLoading(false);
-    }
+    abortControllerRef.current?.abort();
+    setIsLoading(false);
+    setMessages(prev => {
+      const lastMessage = prev[prev.length - 1];
+      if (lastMessage?.isStreaming) {
+        return [
+          ...prev.slice(0, -1),
+          { ...lastMessage, isStreaming: false, content: lastMessage.content || 'Cancelled' },
+        ];
+      }
+      return prev;
+    });
   }, []);
 
   return {
@@ -938,7 +942,7 @@ apps/mobile/src/
     spacing.ts
   services/
     api.ts
-    websocket.ts
+    sse.ts              # SSE streaming (not websocket.ts)
   hooks/
     useAgentStream.ts
 ```
@@ -2380,10 +2384,19 @@ apps/mobile/src/
 
 ### Manual Testing
 - [ ] Auth flow (login, signup, logout, token refresh)
-- [ ] Chat streaming
-- [ ] Tool call display
-- [ ] Secrets CRUD
+- [ ] Chat SSE streaming with orchestrator
+- [ ] Tool call display (orchestrator.tool_call, orchestrator.tool_result events)
+- [ ] Secrets CRUD (API not yet implemented)
 - [ ] Navigation flows
+
+### Testing with Backend
+```bash
+# Start backend server first
+cd apps/backend && pnpm dev
+
+# Then start mobile app
+cd apps/mobile && pnpm start
+```
 
 ### Device Testing
 - [ ] iOS simulator
@@ -2398,11 +2411,14 @@ apps/mobile/src/
 ### With Backend Dev 1
 - **Week 2:** Confirm JWT payload structure
 - **Week 2:** Confirm API error response format
-- **Week 3:** Test WebSocket authentication flow
+- **Note:** Auth is currently placeholder (accepts any token)
 
 ### With Backend Dev 2
-- **Week 3:** Confirm WebSocket event types match shared-types
+- **Important:** Backend uses SSE, not WebSocket
+- **Week 3:** SSE event types documented in this guide
 - **Week 4:** Test tool call display with real tool calls
+- **API Base:** `http://localhost:3000/api/v1`
+- **Main Endpoint:** `POST /orchestrator/run` (SSE stream)
 
 ---
 

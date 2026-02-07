@@ -154,6 +154,9 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
   const userId = 'anonymous';
   const runId = uuidv4();
 
+  const log = logger.child({ runId, userId });
+  log.info('Starting orchestrator run', { inputPreview: input.slice(0, 100) });
+
   // Return SSE stream
   return streamSSE(c, async (stream) => {
     const writer = createHonoSSEWriter(stream);
@@ -162,32 +165,47 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
     try {
       const orchestrator = createOrchestratorService((event) => {
         // Events are already published via the adapter, but we can log here
-        console.log(`[Run ${runId}] Event: ${event.type}`);
+        log.debug('Event emitted', { eventType: event.type });
       });
 
+      log.debug('Orchestrator service created, executing run');
       const result = await orchestrator.executeRun(userId as string, runId, input);
 
-      // Send completion event
+      log.info('Orchestrator run completed', {
+        success: result.success,
+        totalTokens: result.totalTokens,
+        error: result.error,
+        responsePreview: result.response?.slice(0, 100),
+      });
+
+      // Send completion event with the response
       await stream.writeSSE({
         event: 'orchestrator.complete',
         data: JSON.stringify({
           success: result.success,
+          response: result.response,
           totalTokens: result.totalTokens,
           totalCost: result.totalCost,
           tasksCompleted: result.tasksCompleted,
           tasksFailed: result.tasksFailed,
+          error: result.error,
         }),
       });
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[Run ${runId}] Error:`, error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      log.error('Orchestrator run failed with exception', error, { 
+        errorMessage,
+      });
 
       await stream.writeSSE({
         event: 'agent.error',
         data: JSON.stringify({
           message: errorMessage,
           code: 'ORCHESTRATOR_ERROR',
+          stack: process.env.NODE_ENV === 'development' ? errorStack : undefined,
         }),
       });
     } finally {

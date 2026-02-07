@@ -146,6 +146,9 @@ export const ToolParameterSchema: z.ZodType<ToolParameter> = z.lazy(() =>
     description: z.string().optional(),
     enum: z.array(z.string()).optional(),
     items: ToolParameterSchema.optional(),
+    // For object types - nested properties
+    properties: z.record(z.string(), ToolParameterSchema).optional(),
+    required: z.array(z.string()).optional(),
   })
 );
 
@@ -154,6 +157,9 @@ export interface ToolParameter {
   description?: string;
   enum?: string[];
   items?: ToolParameter;
+  // For object types - nested properties
+  properties?: Record<string, ToolParameter>;
+  required?: string[];
 }
 
 // =============================================================================

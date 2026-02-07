@@ -98,8 +98,19 @@ export class VercelAIAdapter implements LLMProviderPort {
     // Track accumulated data for final response
     let accumulatedText = '';
     const toolCalls: LLMToolCall[] = [];
+    let finishReceived = false;
+    let eventCount = 0;
+
+    console.log(`[VercelAIAdapter] Starting stream for model: ${modelId}`);
 
     for await (const part of result.fullStream) {
+      eventCount++;
+      
+      // Log all event types for debugging
+      if (eventCount <= 5 || part.type === 'finish' || part.type === 'tool-call' || part.type === 'error') {
+        console.log(`[VercelAIAdapter] Stream event #${eventCount}: ${part.type}`);
+      }
+
       switch (part.type) {
         case 'text-delta':
           accumulatedText += part.textDelta;
@@ -124,6 +135,8 @@ export class VercelAIAdapter implements LLMProviderPort {
           break;
 
         case 'finish':
+          finishReceived = true;
+          console.log(`[VercelAIAdapter] Finish event received after ${eventCount} events`);
           // Get final usage - need to await the promises
           const usage = await result.usage;
           const finishReason = await result.finishReason;
@@ -142,7 +155,34 @@ export class VercelAIAdapter implements LLMProviderPort {
             },
           };
           break;
+
+        case 'error':
+          console.error(`[VercelAIAdapter] Stream error:`, (part as { type: 'error'; error: unknown }).error);
+          throw (part as { type: 'error'; error: unknown }).error;
       }
+    }
+
+    console.log(`[VercelAIAdapter] Stream ended after ${eventCount} events, finishReceived: ${finishReceived}`);
+
+    // If we didn't receive a finish event, still emit a done with what we have
+    if (!finishReceived) {
+      console.warn('[VercelAIAdapter] Stream ended without finish event, emitting done with accumulated data');
+      const usage = await result.usage;
+      const finishReason = await result.finishReason;
+      
+      yield {
+        type: 'done',
+        response: {
+          content: accumulatedText || null,
+          toolCalls,
+          usage: {
+            promptTokens: usage?.promptTokens ?? 0,
+            completionTokens: usage?.completionTokens ?? 0,
+            totalTokens: usage?.totalTokens ?? 0,
+          },
+          finishReason: this.mapFinishReason(finishReason ?? 'stop'),
+        },
+      };
     }
   }
 
@@ -173,6 +213,23 @@ export class VercelAIAdapter implements LLMProviderPort {
         case 'user':
           return { role: 'user', content: m.content };
         case 'assistant':
+          // Handle assistant messages with tool calls
+          if (m.toolCalls && m.toolCalls.length > 0) {
+            return {
+              role: 'assistant',
+              content: [
+                // Include text content if present
+                ...(m.content ? [{ type: 'text' as const, text: m.content }] : []),
+                // Include tool calls
+                ...m.toolCalls.map((tc) => ({
+                  type: 'tool-call' as const,
+                  toolCallId: tc.id,
+                  toolName: tc.name,
+                  args: JSON.parse(tc.arguments),
+                })),
+              ],
+            };
+          }
           return { role: 'assistant', content: m.content };
         case 'system':
           return { role: 'system', content: m.content };

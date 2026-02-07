@@ -30,21 +30,33 @@ Tasks that depend on other tasks will wait for their dependencies to complete.`,
         description: 'Array of tasks in the plan',
         items: {
           type: 'object',
-          description: 'A single task node',
+          properties: {
+            tempId: {
+              type: 'string',
+              description: 'Temporary ID for referencing in dependencies (e.g., "task_1", "task_2")',
+            },
+            description: {
+              type: 'string',
+              description: 'Clear description of what this task should accomplish',
+            },
+            agentType: {
+              type: 'string',
+              enum: ['general', 'research', 'coding', 'scheduling', 'productivity', 'messaging'],
+              description: 'Which agent type to assign this task to',
+            },
+            dependencies: {
+              type: 'array',
+              description: 'Array of tempIds this task depends on (leave empty for no dependencies)',
+              items: { type: 'string' },
+            },
+          },
+          required: ['tempId', 'description', 'agentType', 'dependencies'],
         },
       },
     },
     required: ['reasoning', 'tasks'],
   },
 };
-
-// Task item schema (for documentation - actual validation in service)
-// {
-//   tempId: string,           // Temporary ID for referencing in dependencies (e.g., "task_1")
-//   description: string,      // Clear description of what this task should accomplish
-//   agentType: AgentType,     // Which agent type to use
-//   dependencies: string[],   // Array of tempIds this task depends on
-// }
 
 // =============================================================================
 // Tool: modify_plan
@@ -77,6 +89,23 @@ export const MODIFY_PLAN_TOOL: ToolDefinition = {
       newTask: {
         type: 'object',
         description: 'New task details (for add/update)',
+        properties: {
+          description: {
+            type: 'string',
+            description: 'Task description',
+          },
+          agentType: {
+            type: 'string',
+            enum: ['general', 'research', 'coding', 'scheduling', 'productivity', 'messaging'],
+            description: 'Agent type to assign',
+          },
+          dependencies: {
+            type: 'array',
+            description: 'Task IDs this depends on',
+            items: { type: 'string' },
+          },
+        },
+        required: ['description', 'agentType'],
       },
       newDependencies: {
         type: 'array',
@@ -228,9 +257,9 @@ The result will be passed as context to dependent tasks.`,
         type: 'string',
         description: 'ID of the task to mark complete',
       },
-      result: {
-        type: 'object',
-        description: 'The result/output of the task',
+      resultSummary: {
+        type: 'string',
+        description: 'Summary of the result/output of the task',
       },
       summary: {
         type: 'string',
@@ -305,9 +334,10 @@ Do NOT store:
         enum: ['preference', 'fact', 'decision', 'pattern', 'general'],
         description: 'Category of the memory',
       },
-      metadata: {
-        type: 'object',
-        description: 'Optional additional metadata',
+      tags: {
+        type: 'array',
+        description: 'Optional tags for categorization',
+        items: { type: 'string' },
       },
     },
     required: ['content', 'category'],
