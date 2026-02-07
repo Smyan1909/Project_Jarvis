@@ -16,6 +16,12 @@ import { OrchestratorService } from '../../../application/services/OrchestratorS
 import { TaskPlanService } from '../../../application/services/TaskPlanService.js';
 import { SubAgentManager } from '../../../application/services/SubAgentManager.js';
 import { LoopDetectionService } from '../../../application/services/LoopDetectionService.js';
+import {
+  ToolRegistry,
+  registerBuiltInTools,
+} from '../../../application/services/ToolRegistry.js';
+import { registerMemoryTools, registerKnowledgeGraphTools } from '../../../application/services/MemoryTools.js';
+import { registerWebTools } from '../../../application/services/WebTools.js';
 
 // Adapters
 import {
@@ -28,9 +34,13 @@ import {
   OrchestratorEventStreamAdapter,
   createHonoSSEWriter,
 } from '../../../adapters/orchestrator/OrchestratorEventStreamAdapter.js';
+import { InMemoryMemoryStore } from '../../../adapters/memory/InMemoryMemoryStore.js';
+import { InMemoryKnowledgeGraph } from '../../../adapters/kg/InMemoryKnowledgeGraph.js';
+import { VercelEmbeddingAdapter } from '../../../adapters/embedding/VercelEmbeddingAdapter.js';
 
 // LLM and Tools
 import { llmRouter } from '../../../application/services/LLMRouterService.js';
+import { logger } from '../../../infrastructure/logging/logger.js';
 
 // =============================================================================
 // Request Schemas
@@ -57,157 +67,41 @@ const stateRepository = new InMemoryOrchestratorStateRepository();
 const cacheAdapter = new InMemoryOrchestratorCacheAdapter();
 const eventStreamAdapter = new OrchestratorEventStreamAdapter(cacheAdapter);
 
-// =============================================================================
-// Mock Tool Invoker (for MVP - replace with real implementation)
-// =============================================================================
+// Create embedding adapter for memory and KG
+const embeddingAdapter = new VercelEmbeddingAdapter();
 
-import type { ToolInvokerPort } from '../../../ports/ToolInvokerPort.js';
-import type { ToolDefinition, ToolResult } from '@project-jarvis/shared-types';
+// Create real memory store and knowledge graph
+const memoryStore = new InMemoryMemoryStore(embeddingAdapter);
+const knowledgeGraph = new InMemoryKnowledgeGraph(embeddingAdapter);
 
-class MockToolInvoker implements ToolInvokerPort {
-  private tools: ToolDefinition[] = [
-    {
-      id: 'get_current_time',
-      name: 'get_current_time',
-      description: 'Get the current date and time',
-      parameters: {
-        type: 'object',
-        properties: {
-          timezone: { type: 'string', description: 'Timezone (e.g., "America/New_York", "UTC")' },
-        },
-      },
-    },
-    {
-      id: 'calculate',
-      name: 'calculate',
-      description: 'Perform mathematical calculations',
-      parameters: {
-        type: 'object',
-        properties: {
-          expression: { type: 'string', description: 'Mathematical expression to evaluate' },
-        },
-        required: ['expression'],
-      },
-    },
-    {
-      id: 'recall',
-      name: 'recall',
-      description: 'Search memories for relevant information',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'What to search for in memories' },
-          limit: { type: 'number', description: 'Maximum number of memories to return' },
-        },
-        required: ['query'],
-      },
-    },
-  ];
+// Create tool registry with all tools registered
+const toolRegistry = new ToolRegistry();
 
-  async getTools(userId: string): Promise<ToolDefinition[]> {
-    return this.tools;
-  }
+// Register all tools
+function initializeToolRegistry(): void {
+  const log = logger.child({ module: 'orchestrator.init' });
+  log.info('Initializing tool registry');
 
-  async invoke(userId: string, toolId: string, input: Record<string, unknown>): Promise<ToolResult> {
-    switch (toolId) {
-      case 'get_current_time': {
-        const tz = (input.timezone as string) || 'UTC';
-        return {
-          success: true,
-          output: {
-            datetime: new Date().toLocaleString('en-US', { timeZone: tz }),
-            timezone: tz,
-            timestamp: Date.now(),
-          },
-        };
-      }
-      case 'calculate': {
-        try {
-          const expr = input.expression as string;
-          // Safe evaluation using Function constructor with limited scope
-          const safeEval = new Function(
-            'Math',
-            `return ${expr.replace(/[^0-9+\-*/().sqrt,pow,sin,cos,tan,log,abs,floor,ceil,round\s]/g, '')}`
-          );
-          const result = safeEval(Math);
-          return { success: true, output: { expression: expr, result } };
-        } catch (error) {
-          return { success: false, output: null, error: 'Invalid expression' };
-        }
-      }
-      case 'recall': {
-        // Mock memory recall - returns empty for now
-        return {
-          success: true,
-          output: { found: 0, memories: [] },
-        };
-      }
-      default:
-        return { success: false, output: null, error: `Unknown tool: ${toolId}` };
-    }
-  }
+  // Built-in tools (get_current_time, calculate)
+  registerBuiltInTools(toolRegistry);
 
-  async hasPermission(userId: string, toolId: string): Promise<boolean> {
-    return this.tools.some(t => t.id === toolId);
-  }
+  // Memory tools (remember, recall)
+  registerMemoryTools(toolRegistry, memoryStore);
+
+  // Knowledge graph tools (kg_create_entity, kg_create_relation, kg_query, kg_get_entity)
+  registerKnowledgeGraphTools(toolRegistry, knowledgeGraph);
+
+  // Web tools (web_search, web_fetch)
+  registerWebTools(toolRegistry);
+
+  log.info('Tool registry initialized', {
+    toolCount: toolRegistry.getRegisteredToolIds().length,
+    tools: toolRegistry.getRegisteredToolIds(),
+  });
 }
 
-const mockToolInvoker = new MockToolInvoker();
-
-// =============================================================================
-// Mock Memory Store (for MVP - replace with real implementation)
-// =============================================================================
-
-import type { MemoryStorePort } from '../../../ports/MemoryStorePort.js';
-import type { MemoryItem, MemorySearchResult } from '@project-jarvis/shared-types';
-
-class MockMemoryStore implements MemoryStorePort {
-  private memories: Map<string, MemoryItem> = new Map();
-
-  async store(userId: string, content: string, metadata?: Record<string, unknown>): Promise<MemoryItem> {
-    const item: MemoryItem = {
-      id: uuidv4(),
-      userId,
-      content,
-      embedding: [], // Would be real embeddings in production
-      metadata: metadata || {},
-      createdAt: new Date(),
-    };
-    this.memories.set(item.id, item);
-    return item;
-  }
-
-  async search(userId: string, query: string, limit?: number): Promise<MemorySearchResult[]> {
-    // Mock search - returns recent memories for the user
-    const userMemories = Array.from(this.memories.values())
-      .filter(m => m.userId === userId)
-      .slice(0, limit || 5)
-      .map(m => ({
-        id: m.id,
-        content: m.content,
-        metadata: m.metadata,
-        similarity: 0.8, // Mock similarity
-        createdAt: m.createdAt,
-      }));
-    return userMemories;
-  }
-
-  async getRecent(userId: string, limit?: number): Promise<MemoryItem[]> {
-    return Array.from(this.memories.values())
-      .filter(m => m.userId === userId)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, limit || 10);
-  }
-
-  async delete(userId: string, memoryId: string): Promise<void> {
-    const memory = this.memories.get(memoryId);
-    if (memory && memory.userId === userId) {
-      this.memories.delete(memoryId);
-    }
-  }
-}
-
-const mockMemoryStore = new MockMemoryStore();
+// Initialize on module load
+initializeToolRegistry();
 
 // =============================================================================
 // Service Factory
@@ -220,15 +114,15 @@ function createOrchestratorService(onEvent: (event: StreamEvent) => void): Orche
   const loopDetection = new LoopDetectionService(cacheAdapter, stateRepository);
   const agentManager = new SubAgentManager(
     llm,
-    mockToolInvoker,
+    toolRegistry,
     stateRepository,
     cacheAdapter
   );
 
   return new OrchestratorService(
     llm,
-    mockToolInvoker,
-    mockMemoryStore,
+    toolRegistry,
+    memoryStore,
     stateRepository,
     cacheAdapter,
     planService,
@@ -260,6 +154,9 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
   const userId = 'anonymous';
   const runId = uuidv4();
 
+  const log = logger.child({ runId, userId });
+  log.info('Starting orchestrator run', { inputPreview: input.slice(0, 100) });
+
   // Return SSE stream
   return streamSSE(c, async (stream) => {
     const writer = createHonoSSEWriter(stream);
@@ -268,32 +165,47 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
     try {
       const orchestrator = createOrchestratorService((event) => {
         // Events are already published via the adapter, but we can log here
-        console.log(`[Run ${runId}] Event: ${event.type}`);
+        log.debug('Event emitted', { eventType: event.type });
       });
 
+      log.debug('Orchestrator service created, executing run');
       const result = await orchestrator.executeRun(userId as string, runId, input);
 
-      // Send completion event
+      log.info('Orchestrator run completed', {
+        success: result.success,
+        totalTokens: result.totalTokens,
+        error: result.error,
+        responsePreview: result.response?.slice(0, 100),
+      });
+
+      // Send completion event with the response
       await stream.writeSSE({
         event: 'orchestrator.complete',
         data: JSON.stringify({
           success: result.success,
+          response: result.response,
           totalTokens: result.totalTokens,
           totalCost: result.totalCost,
           tasksCompleted: result.tasksCompleted,
           tasksFailed: result.tasksFailed,
+          error: result.error,
         }),
       });
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[Run ${runId}] Error:`, error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      log.error('Orchestrator run failed with exception', error, { 
+        errorMessage,
+      });
 
       await stream.writeSSE({
         event: 'agent.error',
         data: JSON.stringify({
           message: errorMessage,
           code: 'ORCHESTRATOR_ERROR',
+          stack: process.env.NODE_ENV === 'development' ? errorStack : undefined,
         }),
       });
     } finally {

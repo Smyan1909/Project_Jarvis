@@ -46,10 +46,18 @@ class Logger {
         this.log('warn', message, data);
     }
 
-    error(message: string, error?: Error, data?: Record<string, unknown>) {
+    error(message: string, error?: unknown, data?: Record<string, unknown>) {
+        let errorData: Record<string, unknown> | undefined;
+        
+        if (error instanceof Error) {
+            errorData = { message: error.message, stack: error.stack, name: error.name };
+        } else if (error !== undefined) {
+            errorData = { message: String(error) };
+        }
+        
         this.log('error', message, {
             ...data,
-            error: error ? { message: error.message, stack: error.stack } : undefined,
+            error: errorData,
         });
     }
 }

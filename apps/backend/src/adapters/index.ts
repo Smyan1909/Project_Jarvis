@@ -13,3 +13,5 @@ export * from './embedding/index.js';
 
 // Orchestrator
 export * from './orchestrator/index.js';
+export * from './memory/index.js';
+export * from './kg/index.js';

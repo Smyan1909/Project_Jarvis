@@ -40,6 +40,12 @@ export function convertToolDefinitions(
 /**
  * Convert JSON Schema-like ToolParameters to Zod schema
  *
+ * Uses strict() mode to set additionalProperties: false in JSON Schema,
+ * which is required by OpenAI's function calling API.
+ *
+ * Note: OpenAI strict mode requires ALL properties to be in the required array.
+ * Optional fields are handled by allowing the model to pass empty/null values.
+ *
  * @param params - Tool parameters in JSON Schema format
  * @returns Zod object schema
  */
@@ -50,19 +56,24 @@ function convertParametersToZod(params: ToolParameters): z.ZodObject<z.ZodRawSha
   for (const [key, param] of Object.entries(params.properties)) {
     let fieldSchema = convertParameterToZod(param);
 
-    // Make optional if not in required array
+    // For OpenAI strict mode, all fields must be in 'required', but we can make them nullable
+    // to indicate they're optional semantically
     if (!requiredFields.has(key)) {
-      fieldSchema = fieldSchema.optional();
+      fieldSchema = fieldSchema.nullable();
     }
 
     shape[key] = fieldSchema;
   }
 
-  return z.object(shape);
+  // Use strict() to set additionalProperties: false - required by OpenAI
+  return z.object(shape).strict();
 }
 
 /**
  * Convert a single ToolParameter to its Zod equivalent
+ *
+ * OpenAI's strict mode requires ALL properties to be in the required array.
+ * We handle this by making all nested object fields required in the Zod schema.
  *
  * @param param - Single parameter definition
  * @returns Corresponding Zod type
@@ -92,17 +103,32 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
       if (param.items) {
         schema = z.array(convertParameterToZod(param.items));
       } else {
-        schema = z.array(z.unknown());
+        schema = z.array(z.string()); // Default to string array instead of unknown
       }
       break;
 
     case 'object':
-      // For nested objects without full schema, use record
-      schema = z.record(z.string(), z.unknown());
+      // Handle nested objects with defined properties
+      if (param.properties && Object.keys(param.properties).length > 0) {
+        const shape: z.ZodRawShape = {};
+        
+        // OpenAI strict mode requires ALL properties to be required
+        // So we make all fields required in the Zod schema
+        for (const [key, nestedParam] of Object.entries(param.properties)) {
+          shape[key] = convertParameterToZod(nestedParam);
+        }
+
+        // Use strict() to set additionalProperties: false - required by OpenAI
+        schema = z.object(shape).strict();
+      } else {
+        // For objects without defined properties, don't use object type at all
+        // Just use a string that will contain JSON
+        schema = z.string().describe('JSON string representing the object');
+      }
       break;
 
     default:
-      schema = z.unknown();
+      schema = z.string(); // Default to string instead of unknown
   }
 
   // Add description if present
