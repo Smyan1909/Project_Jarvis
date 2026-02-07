@@ -52,3 +52,6 @@ apps/mobile/ios/
 .idea/
 
 .pnpm-store/**
+
+# Images in case debuging
+tmp_imgs/

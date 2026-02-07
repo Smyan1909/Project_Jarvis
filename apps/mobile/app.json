@@ -4,11 +4,29 @@
     "slug": "project-jarvis",
     "version": "0.1.0",
     "sdkVersion": "54.0.0",
+    "entryPoint": "./index.js",
     "android": {
-      "package": "com.anonymous.projectjarvis"
+      "package": "com.anonymous.projectjarvis",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET"
+      ]
     },
     "ios": {
-      "bundleIdentifier": "com.anonymous.projectjarvis"
-    }
+      "bundleIdentifier": "com.anonymous.projectjarvis",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow Jarvis to use speech recognition for voice input.",
+        "NSMicrophoneUsageDescription": "Allow Jarvis to use the microphone for voice input."
+      }
+    },
+    "plugins": [
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Jarvis to use the microphone for voice input.",
+          "speechRecognitionPermission": "Allow Jarvis to use speech recognition."
+        }
+      ]
+    ]
   }
 }
