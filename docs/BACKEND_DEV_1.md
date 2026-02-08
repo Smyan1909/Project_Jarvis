@@ -6,8 +6,41 @@ You are responsible for the **infrastructure layer** of Project Jarvis:
 - Database setup and migrations (Postgres + pgvector + Drizzle ORM)
 - Authentication system (JWT + refresh tokens)
 - User secrets management (AES-256-GCM encryption)
-- WebSocket server infrastructure
+- WebSocket/SSE server infrastructure
 - Security, rate limiting, and observability
+
+---
+
+## Implementation Status
+
+> **Last Updated:** February 7, 2026 (Updated: Auth system marked as complete)
+
+### Completed
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Drizzle ORM Setup | **DONE** | Schema in `apps/backend/src/infrastructure/db/schema.ts` |
+| Database Schema | **DONE** | Users, secrets, agent runs, memories, KG, tool permissions |
+| Config Management | **DONE** | Zod validation in `infrastructure/config/` |
+| Logging Infrastructure | **DONE** | Structured logging in `infrastructure/logging/` |
+| Auth Service | **DONE** | JWT + refresh token rotation in `application/services/auth-service.ts` |
+| Auth Middleware | **DONE** | Real JWT validation in `api/http/middleware/auth.ts` |
+| User Repository | **DONE** | `adapters/storage/user-repository.ts` |
+| Refresh Token Repository | **DONE** | `adapters/storage/refresh-token-repository.ts` |
+| Auth Routes | **DONE** | register, login, refresh, logout, logout-all, me at `/api/v1/auth` |
+| Secrets API | **DONE** | Full CRUD at `/api/v1/secrets` |
+| pgvector Indexes | **DONE** | HNSW indexes in `003_vector_indexes.sql` |
+| Memory Repository (Postgres) | **DONE** | `PgMemoryStore` with vector search |
+| Knowledge Graph Repository | **DONE** | `PgKnowledgeGraph` with BFS traversal |
+| Tool Permission System | **DONE** | Per-user per-tool access control |
+| Usage/Cost Tracking API | **DONE** | Aggregation endpoints at `/api/v1/usage` |
+| Rate Limiting | **NOT STARTED** | Deferred |
+
+### Integration Notes
+
+The backend now uses **Hono** instead of Express, and **SSE** instead of WebSocket for real-time events. The orchestrator layer (Backend Dev 2) is fully implemented with in-memory adapters that have been replaced with PostgreSQL implementations for memory and knowledge graph.
+
+---
 
 ## Weekly Breakdown
 
@@ -55,188 +88,34 @@ volumes:
 ```
 
 **Tasks:**
-- [ ] Create Docker Compose file
+- [x] Create Docker Compose file
 - [ ] Verify pgvector extension loads: `CREATE EXTENSION IF NOT EXISTS vector;`
 - [ ] Document local setup in SETUP.md
 
 ### Day 2-3: Drizzle ORM Setup
 
-**Install dependencies:**
-```bash
-pnpm add drizzle-orm postgres
-pnpm add -D drizzle-kit @types/pg
-```
+**Status: DONE**
 
-**Create `apps/backend/drizzle.config.ts`:**
-```typescript
-import type { Config } from 'drizzle-kit';
+Schema exists at `apps/backend/src/infrastructure/db/schema.ts`
 
-export default {
-  schema: './src/infrastructure/db/schema.ts',
-  out: './src/infrastructure/db/migrations',
-  driver: 'pg',
-  dbCredentials: {
-    connectionString: process.env.DATABASE_URL!,
-  },
-} satisfies Config;
-```
-
-**Create `apps/backend/src/infrastructure/db/schema.ts`:**
-```typescript
-import { pgTable, uuid, text, timestamp, varchar, integer, jsonb, boolean, real } from 'drizzle-orm/pg-core';
-import { sql } from 'drizzle-orm';
-
-// Custom pgvector type
-const vector = (name: string, dimensions: number) => 
-  text(name).$type<number[]>();
-
-// === User Domain ===
-export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  email: varchar('email', { length: 255 }).notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
-  displayName: varchar('display_name', { length: 255 }),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
-
-export const userSecrets = pgTable('user_secrets', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  provider: varchar('provider', { length: 50 }).notNull(), // 'openai' | 'anthropic' | 'composio' | 'github' | 'custom'
-  name: varchar('name', { length: 255 }).notNull(),
-  encryptedValue: text('encrypted_value').notNull(),
-  iv: varchar('iv', { length: 64 }).notNull(),
-  authTag: varchar('auth_tag', { length: 64 }).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
-
-export const refreshTokens = pgTable('refresh_tokens', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  tokenHash: text('token_hash').notNull(),
-  expiresAt: timestamp('expires_at').notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-
-// === Agent Domain ===
-export const agentRuns = pgTable('agent_runs', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  status: varchar('status', { length: 20 }).notNull().default('pending'), // 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  totalTokens: integer('total_tokens').notNull().default(0),
-  totalCost: real('total_cost').notNull().default(0),
-  startedAt: timestamp('started_at').defaultNow().notNull(),
-  completedAt: timestamp('completed_at'),
-});
-
-export const messages = pgTable('messages', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
-  role: varchar('role', { length: 20 }).notNull(), // 'user' | 'assistant' | 'system' | 'tool'
-  content: text('content').notNull(),
-  toolCallId: uuid('tool_call_id'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-
-export const toolCalls = pgTable('tool_calls', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
-  toolId: varchar('tool_id', { length: 255 }).notNull(),
-  input: jsonb('input').notNull(),
-  output: jsonb('output'),
-  status: varchar('status', { length: 20 }).notNull().default('pending'), // 'pending' | 'success' | 'error'
-  durationMs: integer('duration_ms'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-
-// === Memory Domain ===
-export const memories = pgTable('memories', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  content: text('content').notNull(),
-  embedding: vector('embedding', 1536), // OpenAI text-embedding-3-small
-  metadata: jsonb('metadata').default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-
-// === Knowledge Graph Domain ===
-export const kgEntities = pgTable('kg_entities', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  type: varchar('type', { length: 100 }).notNull(),
-  name: varchar('name', { length: 500 }).notNull(),
-  properties: jsonb('properties').default({}),
-  embedding: vector('embedding', 1536),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
-
-export const kgRelations = pgTable('kg_relations', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  sourceId: uuid('source_id').notNull().references(() => kgEntities.id, { onDelete: 'cascade' }),
-  targetId: uuid('target_id').notNull().references(() => kgEntities.id, { onDelete: 'cascade' }),
-  type: varchar('type', { length: 100 }).notNull(),
-  properties: jsonb('properties').default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-```
-
-**Tasks:**
-- [ ] Install Drizzle dependencies
-- [ ] Create schema file with all tables
-- [ ] Run first migration: `pnpm drizzle-kit generate:pg`
-- [ ] Create migration runner script
+**Current Schema Tables:**
+- `users` - User accounts
+- `userSecrets` - Encrypted API keys
+- `refreshTokens` - JWT refresh tokens
+- `agentRuns` - Agent execution runs
+- `messages` - Conversation messages
+- `toolCalls` - Tool invocation history
+- `memories` - Vector memory storage
+- `kgEntities` - Knowledge graph entities
+- `kgRelations` - Knowledge graph relationships
 
 ### Day 3-4: Config Management
 
-**Create `apps/backend/src/infrastructure/config/index.ts`:**
-```typescript
-import { z } from 'zod';
+**Status: DONE**
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.coerce.number().default(3000),
-  
-  // Database
-  DATABASE_URL: z.string().url(),
-  
-  // Redis
-  REDIS_URL: z.string().url().default('redis://localhost:6379'),
-  
-  // Auth
-  JWT_SECRET: z.string().min(32),
-  JWT_ACCESS_EXPIRY: z.string().default('15m'),
-  JWT_REFRESH_EXPIRY: z.string().default('7d'),
-  
-  // Secrets encryption
-  SECRETS_MASTER_KEY: z.string().length(64), // 32 bytes hex-encoded
-  
-  // LLM (optional - can use user secrets)
-  OPENAI_API_KEY: z.string().optional(),
-  ANTHROPIC_API_KEY: z.string().optional(),
-});
+Located at `apps/backend/src/infrastructure/config/index.ts`
 
-export type Env = z.infer<typeof envSchema>;
-
-function loadConfig(): Env {
-  const result = envSchema.safeParse(process.env);
-  
-  if (!result.success) {
-    console.error('Invalid environment variables:');
-    console.error(result.error.format());
-    process.exit(1);
-  }
-  
-  return result.data;
-}
-
-export const config = loadConfig();
-```
-
-**Create `.env.example`:**
+**Current `.env.example`:**
 ```bash
 NODE_ENV=development
 PORT=3000
@@ -244,122 +123,44 @@ PORT=3000
 # Database
 DATABASE_URL=postgresql://jarvis:jarvis_dev@localhost:5432/jarvis
 
-# Redis
-REDIS_URL=redis://localhost:6379
+# LLM keys
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 
-# Auth (generate with: openssl rand -hex 32)
-JWT_SECRET=your-32-char-minimum-secret-here-change-me
-JWT_ACCESS_EXPIRY=15m
-JWT_REFRESH_EXPIRY=7d
-
-# Secrets encryption (generate with: openssl rand -hex 32)
-SECRETS_MASTER_KEY=your-64-char-hex-encoded-32-byte-key-here
-
-# LLM keys (optional - users can provide their own)
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
+# Optional
+TAVILY_API_KEY=tvly-...
+LOG_LEVEL=info
 ```
-
-**Tasks:**
-- [ ] Install zod: `pnpm add zod`
-- [ ] Create config validation
-- [ ] Create `.env.example` file
-- [ ] Add `.env` to `.gitignore`
 
 ### Day 4-5: Logging Infrastructure
 
-**Create `apps/backend/src/infrastructure/logging/logger.ts`:**
-```typescript
-import { randomUUID } from 'crypto';
+**Status: DONE**
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+Located at `apps/backend/src/infrastructure/logging/logger.ts`
 
-interface LogContext {
-  correlationId?: string;
-  userId?: string;
-  runId?: string;
-  [key: string]: unknown;
-}
+Features:
+- Structured JSON logging
+- Child logger support with context
+- Log level filtering based on `LOG_LEVEL` env var
 
-class Logger {
-  private context: LogContext = {};
-
-  child(context: LogContext): Logger {
-    const child = new Logger();
-    child.context = { ...this.context, ...context };
-    return child;
-  }
-
-  private log(level: LogLevel, message: string, data?: Record<string, unknown>) {
-    const entry = {
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      ...this.context,
-      ...data,
-    };
-    
-    // In production, send to log aggregator
-    // For now, structured JSON to stdout
-    console.log(JSON.stringify(entry));
-  }
-
-  debug(message: string, data?: Record<string, unknown>) {
-    if (process.env.NODE_ENV !== 'production') {
-      this.log('debug', message, data);
-    }
-  }
-
-  info(message: string, data?: Record<string, unknown>) {
-    this.log('info', message, data);
-  }
-
-  warn(message: string, data?: Record<string, unknown>) {
-    this.log('warn', message, data);
-  }
-
-  error(message: string, error?: Error, data?: Record<string, unknown>) {
-    this.log('error', message, {
-      ...data,
-      error: error ? { message: error.message, stack: error.stack } : undefined,
-    });
-  }
-}
-
-export const logger = new Logger();
-
-// Middleware to add correlation ID
-export function correlationMiddleware(req: any, res: any, next: any) {
-  const correlationId = req.headers['x-correlation-id'] || randomUUID();
-  req.correlationId = correlationId;
-  req.logger = logger.child({ correlationId });
-  res.setHeader('x-correlation-id', correlationId);
-  next();
-}
-```
-
-**Tasks:**
-- [ ] Create logger with structured output
-- [ ] Create correlation ID middleware
-- [ ] Test logging in development
-
-### Files to Create This Week
+### Files Created This Week
 
 ```
 apps/backend/
-  docker-compose.yml
+  docker-compose.yml (NOT YET CREATED)
   drizzle.config.ts
   .env.example
   src/
     infrastructure/
       config/
-        index.ts
+        index.ts           # DONE
       db/
-        schema.ts
-        client.ts
-        migrate.ts
+        schema.ts          # DONE
+        client.ts          # NOT STARTED
+        migrate.ts         # NOT STARTED
       logging/
-        logger.ts
+        logger.ts          # DONE
+        index.ts           # DONE
 ```
 
 ---
@@ -371,722 +172,136 @@ apps/backend/
 - Build secure secrets encryption/decryption
 - Create auth middleware and rate limiting
 
+### Status: COMPLETE
+
+All Week 2 objectives have been implemented with 24 passing integration tests.
+
 ### Day 1-2: User Repository & Auth Service
 
-**Create `apps/backend/src/adapters/storage/user-repository.ts`:**
-```typescript
-import { eq } from 'drizzle-orm';
-import { db } from '../../infrastructure/db/client';
-import { users } from '../../infrastructure/db/schema';
-import type { User } from '@project-jarvis/shared-types';
+**Status: DONE**
 
-export class UserRepository {
-  async findById(id: string): Promise<User | null> {
-    const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
-    return result[0] || null;
-  }
+Implemented:
+- `apps/backend/src/adapters/storage/user-repository.ts` - User CRUD with email normalization
+- `apps/backend/src/adapters/storage/refresh-token-repository.ts` - Token storage with SHA-256 hashing
+- `apps/backend/src/application/services/auth-service.ts` - Full auth flow with bcrypt (12 rounds)
 
-  async findByEmail(email: string): Promise<User | null> {
-    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    return result[0] || null;
-  }
-
-  async create(data: { email: string; passwordHash: string; displayName?: string }): Promise<User> {
-    const result = await db.insert(users).values(data).returning();
-    return result[0];
-  }
-
-  async update(id: string, data: Partial<User>): Promise<User | null> {
-    const result = await db.update(users)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(users.id, id))
-      .returning();
-    return result[0] || null;
-  }
-}
-```
-
-**Create `apps/backend/src/application/services/auth-service.ts`:**
-```typescript
-import { hash, compare } from 'bcrypt';
-import { sign, verify } from 'jsonwebtoken';
-import { randomBytes, createHash } from 'crypto';
-import { config } from '../../infrastructure/config';
-import { UserRepository } from '../../adapters/storage/user-repository';
-import { RefreshTokenRepository } from '../../adapters/storage/refresh-token-repository';
-import { AppError } from '../../domain/errors';
-
-interface TokenPayload {
-  userId: string;
-  email: string;
-}
-
-interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
-
-export class AuthService {
-  constructor(
-    private userRepo: UserRepository,
-    private refreshTokenRepo: RefreshTokenRepository
-  ) {}
-
-  async register(email: string, password: string, displayName?: string): Promise<AuthTokens> {
-    const existing = await this.userRepo.findByEmail(email);
-    if (existing) {
-      throw new AppError('EMAIL_EXISTS', 'Email already registered', 409);
-    }
-
-    const passwordHash = await hash(password, 12);
-    const user = await this.userRepo.create({ email, passwordHash, displayName });
-    
-    return this.generateTokens(user.id, user.email);
-  }
-
-  async login(email: string, password: string): Promise<AuthTokens> {
-    const user = await this.userRepo.findByEmail(email);
-    if (!user) {
-      throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
-    }
-
-    const valid = await compare(password, user.passwordHash);
-    if (!valid) {
-      throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
-    }
-
-    return this.generateTokens(user.id, user.email);
-  }
-
-  async refresh(refreshToken: string): Promise<AuthTokens> {
-    const tokenHash = this.hashToken(refreshToken);
-    const stored = await this.refreshTokenRepo.findByHash(tokenHash);
-    
-    if (!stored || stored.expiresAt < new Date()) {
-      throw new AppError('INVALID_REFRESH_TOKEN', 'Invalid or expired refresh token', 401);
-    }
-
-    // Delete old token
-    await this.refreshTokenRepo.delete(stored.id);
-
-    const user = await this.userRepo.findById(stored.userId);
-    if (!user) {
-      throw new AppError('USER_NOT_FOUND', 'User not found', 404);
-    }
-
-    return this.generateTokens(user.id, user.email);
-  }
-
-  async logout(refreshToken: string): Promise<void> {
-    const tokenHash = this.hashToken(refreshToken);
-    await this.refreshTokenRepo.deleteByHash(tokenHash);
-  }
-
-  verifyAccessToken(token: string): TokenPayload {
-    try {
-      return verify(token, config.JWT_SECRET) as TokenPayload;
-    } catch {
-      throw new AppError('INVALID_TOKEN', 'Invalid or expired access token', 401);
-    }
-  }
-
-  private async generateTokens(userId: string, email: string): Promise<AuthTokens> {
-    const payload: TokenPayload = { userId, email };
-    
-    const accessToken = sign(payload, config.JWT_SECRET, {
-      expiresIn: config.JWT_ACCESS_EXPIRY,
-    });
-
-    const refreshToken = randomBytes(32).toString('hex');
-    const tokenHash = this.hashToken(refreshToken);
-    const expiresAt = new Date(Date.now() + this.parseExpiry(config.JWT_REFRESH_EXPIRY));
-    
-    await this.refreshTokenRepo.create({
-      userId,
-      tokenHash,
-      expiresAt,
-    });
-
-    return { accessToken, refreshToken };
-  }
-
-  private hashToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
-  }
-
-  private parseExpiry(expiry: string): number {
-    const match = expiry.match(/^(\d+)([smhd])$/);
-    if (!match) return 7 * 24 * 60 * 60 * 1000; // default 7 days
-    
-    const value = parseInt(match[1]);
-    const unit = match[2];
-    
-    switch (unit) {
-      case 's': return value * 1000;
-      case 'm': return value * 60 * 1000;
-      case 'h': return value * 60 * 60 * 1000;
-      case 'd': return value * 24 * 60 * 60 * 1000;
-      default: return 7 * 24 * 60 * 60 * 1000;
-    }
-  }
-}
-```
-
-**Tasks:**
-- [ ] Install bcrypt and jsonwebtoken: `pnpm add bcrypt jsonwebtoken && pnpm add -D @types/bcrypt @types/jsonwebtoken`
-- [ ] Create UserRepository
-- [ ] Create RefreshTokenRepository
-- [ ] Create AuthService with register/login/refresh/logout
+Features:
+- Password validation (min 8 chars, letter + number)
+- Email normalization (lowercase, trimmed)
+- Token rotation on refresh
+- Logout from all devices
 
 ### Day 2-3: JWT Auth Middleware
 
-**Create `apps/backend/src/api/middleware/auth.ts`:**
-```typescript
-import { Request, Response, NextFunction } from 'express';
-import { AuthService } from '../../application/services/auth-service';
-import { AppError } from '../../domain/errors';
+**Status: DONE**
 
-declare global {
-  namespace Express {
-    interface Request {
-      userId?: string;
-      userEmail?: string;
-    }
-  }
-}
-
-export function authMiddleware(authService: AuthService) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader?.startsWith('Bearer ')) {
-      throw new AppError('UNAUTHORIZED', 'Missing or invalid authorization header', 401);
-    }
-
-    const token = authHeader.slice(7);
-    const payload = authService.verifyAccessToken(token);
-    
-    req.userId = payload.userId;
-    req.userEmail = payload.email;
-    
-    next();
-  };
-}
-
-export function optionalAuthMiddleware(authService: AuthService) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization;
-    
-    if (authHeader?.startsWith('Bearer ')) {
-      try {
-        const token = authHeader.slice(7);
-        const payload = authService.verifyAccessToken(token);
-        req.userId = payload.userId;
-        req.userEmail = payload.email;
-      } catch {
-        // Ignore invalid tokens for optional auth
-      }
-    }
-    
-    next();
-  };
-}
-```
+Implemented at `apps/backend/src/api/http/middleware/auth.ts`:
+- Real JWT validation using `jsonwebtoken` library
+- Extracts `userId` and `userEmail` from token payload
+- Optional auth middleware for public routes with optional user context
+- Proper 401 responses with error codes
 
 ### Day 3-4: Secrets Encryption Module
 
-**Create `apps/backend/src/infrastructure/crypto/secrets.ts`:**
-```typescript
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-import { config } from '../config';
+**Status: DONE**
 
-const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 16;
-const AUTH_TAG_LENGTH = 16;
-
-// Master key from environment (32 bytes = 64 hex chars)
-const MASTER_KEY = Buffer.from(config.SECRETS_MASTER_KEY, 'hex');
-
-if (MASTER_KEY.length !== 32) {
-  throw new Error('SECRETS_MASTER_KEY must be 32 bytes (64 hex characters)');
-}
-
-export interface EncryptedSecret {
-  encryptedValue: string;
-  iv: string;
-  authTag: string;
-}
-
-export function encryptSecret(plaintext: string): EncryptedSecret {
-  const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, MASTER_KEY, iv);
-  
-  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  
-  const authTag = cipher.getAuthTag();
-  
-  return {
-    encryptedValue: encrypted,
-    iv: iv.toString('hex'),
-    authTag: authTag.toString('hex'),
-  };
-}
-
-export function decryptSecret(encrypted: EncryptedSecret): string {
-  const decipher = createDecipheriv(
-    ALGORITHM,
-    MASTER_KEY,
-    Buffer.from(encrypted.iv, 'hex')
-  );
-  
-  decipher.setAuthTag(Buffer.from(encrypted.authTag, 'hex'));
-  
-  let decrypted = decipher.update(encrypted.encryptedValue, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  
-  return decrypted;
-}
-
-// IMPORTANT: Never log the result of decryptSecret!
-// Use this wrapper when you need to use a secret
-export function withDecryptedSecret<T>(
-  encrypted: EncryptedSecret,
-  fn: (secret: string) => T
-): T {
-  const secret = decryptSecret(encrypted);
-  try {
-    return fn(secret);
-  } finally {
-    // In a real implementation, you might want to zero out the memory
-    // JavaScript doesn't give us that control, but we can at least
-    // ensure the secret doesn't escape this scope
-  }
-}
-```
+Implemented:
+- `apps/backend/src/infrastructure/crypto/secrets.ts` - AES-256-GCM encryption
+- `apps/backend/src/application/services/secrets-service.ts` - Secret management
+- `apps/backend/src/adapters/storage/user-secret-repository.ts` - Encrypted storage
 
 ### Day 4-5: Secrets CRUD API
 
-**Create `apps/backend/src/api/http/secrets-router.ts`:**
-```typescript
-import { Router } from 'express';
-import { z } from 'zod';
-import { SecretsService } from '../../application/services/secrets-service';
-import { authMiddleware } from '../middleware/auth';
-import { validateBody } from '../middleware/validate';
+**Status: DONE**
 
-const createSecretSchema = z.object({
-  provider: z.enum(['openai', 'anthropic', 'composio', 'github', 'custom']),
-  name: z.string().min(1).max(255),
-  value: z.string().min(1),
-});
+Implemented at `/api/v1/secrets`:
+- `GET /` - List user's secrets (values redacted)
+- `POST /` - Create new secret
+- `PATCH /:id` - Update secret
+- `DELETE /:id` - Delete secret
 
-const updateSecretSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  value: z.string().min(1).optional(),
-});
+### Auth Routes
 
-export function createSecretsRouter(secretsService: SecretsService) {
-  const router = Router();
+Implemented at `/api/v1/auth`:
+- `POST /register` - Create account, returns tokens
+- `POST /login` - Authenticate, returns tokens
+- `POST /refresh` - Refresh access token (token rotation)
+- `POST /logout` - Invalidate refresh token
+- `POST /logout-all` - Invalidate all user sessions
+- `GET /me` - Get current user profile
 
-  // List user's secrets (without values)
-  router.get('/', async (req, res) => {
-    const secrets = await secretsService.listByUser(req.userId!);
-    res.json({
-      data: secrets.map(s => ({
-        id: s.id,
-        provider: s.provider,
-        name: s.name,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
-      })),
-    });
-  });
-
-  // Create a new secret
-  router.post('/', validateBody(createSecretSchema), async (req, res) => {
-    const { provider, name, value } = req.body;
-    const secret = await secretsService.create(req.userId!, provider, name, value);
-    res.status(201).json({
-      data: {
-        id: secret.id,
-        provider: secret.provider,
-        name: secret.name,
-        createdAt: secret.createdAt,
-      },
-    });
-  });
-
-  // Update a secret
-  router.patch('/:id', validateBody(updateSecretSchema), async (req, res) => {
-    const secret = await secretsService.update(req.userId!, req.params.id, req.body);
-    res.json({
-      data: {
-        id: secret.id,
-        provider: secret.provider,
-        name: secret.name,
-        updatedAt: secret.updatedAt,
-      },
-    });
-  });
-
-  // Delete a secret
-  router.delete('/:id', async (req, res) => {
-    await secretsService.delete(req.userId!, req.params.id);
-    res.status(204).send();
-  });
-
-  return router;
-}
-```
-
-**Create `apps/backend/src/application/services/secrets-service.ts`:**
-```typescript
-import { UserSecretRepository } from '../../adapters/storage/user-secret-repository';
-import { encryptSecret, decryptSecret, EncryptedSecret } from '../../infrastructure/crypto/secrets';
-import { AppError } from '../../domain/errors';
-import { logger } from '../../infrastructure/logging/logger';
-
-export class SecretsService {
-  constructor(private secretRepo: UserSecretRepository) {}
-
-  async listByUser(userId: string) {
-    return this.secretRepo.findByUserId(userId);
-  }
-
-  async create(userId: string, provider: string, name: string, value: string) {
-    const encrypted = encryptSecret(value);
-    
-    const secret = await this.secretRepo.create({
-      userId,
-      provider,
-      name,
-      encryptedValue: encrypted.encryptedValue,
-      iv: encrypted.iv,
-      authTag: encrypted.authTag,
-    });
-
-    logger.info('Secret created', { userId, provider, secretId: secret.id });
-    // NEVER log the value!
-    
-    return secret;
-  }
-
-  async update(userId: string, secretId: string, data: { name?: string; value?: string }) {
-    const existing = await this.secretRepo.findById(secretId);
-    
-    if (!existing || existing.userId !== userId) {
-      throw new AppError('SECRET_NOT_FOUND', 'Secret not found', 404);
-    }
-
-    const updateData: any = {};
-    
-    if (data.name) {
-      updateData.name = data.name;
-    }
-    
-    if (data.value) {
-      const encrypted = encryptSecret(data.value);
-      updateData.encryptedValue = encrypted.encryptedValue;
-      updateData.iv = encrypted.iv;
-      updateData.authTag = encrypted.authTag;
-    }
-
-    const updated = await this.secretRepo.update(secretId, updateData);
-    
-    logger.info('Secret updated', { userId, secretId });
-    
-    return updated;
-  }
-
-  async delete(userId: string, secretId: string) {
-    const existing = await this.secretRepo.findById(secretId);
-    
-    if (!existing || existing.userId !== userId) {
-      throw new AppError('SECRET_NOT_FOUND', 'Secret not found', 404);
-    }
-
-    await this.secretRepo.delete(secretId);
-    
-    logger.info('Secret deleted', { userId, secretId });
-  }
-
-  // Used internally by LLM adapters
-  async getDecryptedValue(userId: string, provider: string): Promise<string | null> {
-    const secret = await this.secretRepo.findByUserAndProvider(userId, provider);
-    
-    if (!secret) {
-      return null;
-    }
-
-    return decryptSecret({
-      encryptedValue: secret.encryptedValue,
-      iv: secret.iv,
-      authTag: secret.authTag,
-    });
-  }
-}
-```
-
-**Tasks:**
-- [ ] Create secrets encryption module
-- [ ] Create SecretsService
-- [ ] Create secrets API routes
-- [ ] Add input validation
-- [ ] Test encryption/decryption round-trip
-
-### Files to Create This Week
+### Files Created
 
 ```
 apps/backend/src/
   adapters/storage/
-    user-repository.ts
-    refresh-token-repository.ts
-    user-secret-repository.ts
+    user-repository.ts          # DONE
+    refresh-token-repository.ts # DONE
+    user-secret-repository.ts   # DONE
   application/services/
-    auth-service.ts
-    secrets-service.ts
+    auth-service.ts             # DONE
+    secrets-service.ts          # DONE
   api/
     http/
-      auth-router.ts
-      secrets-router.ts
-    middleware/
-      auth.ts
-      validate.ts
-      error-handler.ts
+      routes/
+        auth.ts                 # DONE (24 tests)
+        secrets.ts              # DONE
+      middleware/
+        auth.ts                 # DONE
+        error-handler.ts        # DONE
   infrastructure/crypto/
-    secrets.ts
+    secrets.ts                  # DONE
   domain/
-    errors.ts
+    errors/                     # DONE (shared-types)
 ```
 
 ---
 
-## Week 3: Persistence & WebSocket
+## Week 3: Persistence & Real-Time Events
 
 ### Objectives
 - Create AgentRun, Message, ToolCall repositories
-- Set up WebSocket server
+- Set up real-time event infrastructure
 - Implement EventStreamAdapter
+
+### Current State
+
+**Important Change:** The backend uses **SSE (Server-Sent Events)** instead of WebSocket.
+
+The orchestrator layer has implemented:
+- `SSEEventStreamAdapter` - Publishes events via Hono streaming
+- In-memory state repositories (need Postgres replacement)
 
 ### Day 1-2: Agent Run Repositories
 
-**Create `apps/backend/src/adapters/storage/agent-run-repository.ts`:**
+**Status: PARTIAL**
+
+In-memory implementations exist:
+- `InMemoryOrchestratorStateRepository`
+- `InMemoryOrchestratorCache`
+
+Need PostgreSQL implementations:
+- `apps/backend/src/adapters/storage/agent-run-repository.ts`
+- Message and ToolCall repositories
+
+### Day 3-4: Event Streaming
+
+**Status: DONE (SSE, not WebSocket)**
+
+Located at `apps/backend/src/adapters/orchestrator/SSEEventStreamAdapter.ts`
+
+Uses Hono's built-in streaming:
 ```typescript
-import { eq, and, desc } from 'drizzle-orm';
-import { db } from '../../infrastructure/db/client';
-import { agentRuns, messages, toolCalls } from '../../infrastructure/db/schema';
-
-export class AgentRunRepository {
-  async create(userId: string) {
-    const result = await db.insert(agentRuns).values({ userId }).returning();
-    return result[0];
+return stream(c, async (stream) => {
+  for await (const event of orchestrator.run(input, context)) {
+    await stream.write(`data: ${JSON.stringify(event)}\n\n`);
   }
-
-  async findById(id: string) {
-    const result = await db.select().from(agentRuns).where(eq(agentRuns.id, id)).limit(1);
-    return result[0] || null;
-  }
-
-  async findByUser(userId: string, limit = 20, offset = 0) {
-    return db.select()
-      .from(agentRuns)
-      .where(eq(agentRuns.userId, userId))
-      .orderBy(desc(agentRuns.startedAt))
-      .limit(limit)
-      .offset(offset);
-  }
-
-  async updateStatus(id: string, status: string, cost?: { tokens: number; cost: number }) {
-    const updateData: any = { status };
-    if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-      updateData.completedAt = new Date();
-    }
-    if (cost) {
-      updateData.totalTokens = cost.tokens;
-      updateData.totalCost = cost.cost;
-    }
-    
-    const result = await db.update(agentRuns)
-      .set(updateData)
-      .where(eq(agentRuns.id, id))
-      .returning();
-    return result[0];
-  }
-}
-
-export class MessageRepository {
-  async create(runId: string, role: string, content: string, toolCallId?: string) {
-    const result = await db.insert(messages).values({ runId, role, content, toolCallId }).returning();
-    return result[0];
-  }
-
-  async findByRun(runId: string) {
-    return db.select()
-      .from(messages)
-      .where(eq(messages.runId, runId))
-      .orderBy(messages.createdAt);
-  }
-}
-
-export class ToolCallRepository {
-  async create(runId: string, toolId: string, input: Record<string, unknown>) {
-    const result = await db.insert(toolCalls).values({ runId, toolId, input }).returning();
-    return result[0];
-  }
-
-  async complete(id: string, output: Record<string, unknown>, durationMs: number) {
-    const result = await db.update(toolCalls)
-      .set({ output, durationMs, status: 'success' })
-      .where(eq(toolCalls.id, id))
-      .returning();
-    return result[0];
-  }
-
-  async fail(id: string, error: string, durationMs: number) {
-    const result = await db.update(toolCalls)
-      .set({ output: { error }, durationMs, status: 'error' })
-      .where(eq(toolCalls.id, id))
-      .returning();
-    return result[0];
-  }
-
-  async findByRun(runId: string) {
-    return db.select()
-      .from(toolCalls)
-      .where(eq(toolCalls.runId, runId))
-      .orderBy(toolCalls.createdAt);
-  }
-}
+});
 ```
 
-### Day 3-4: WebSocket Server
-
-**Install Socket.io:**
-```bash
-pnpm add socket.io
-pnpm add -D @types/socket.io
-```
-
-**Create `apps/backend/src/api/ws/socket-server.ts`:**
-```typescript
-import { Server as HttpServer } from 'http';
-import { Server, Socket } from 'socket.io';
-import { AuthService } from '../../application/services/auth-service';
-import { logger } from '../../infrastructure/logging/logger';
-import type { AgentEvent } from '@project-jarvis/shared-types';
-
-interface AuthenticatedSocket extends Socket {
-  userId: string;
-  userEmail: string;
-}
-
-export class SocketServer {
-  private io: Server;
-  private userSockets: Map<string, Set<string>> = new Map();
-
-  constructor(httpServer: HttpServer, authService: AuthService) {
-    this.io = new Server(httpServer, {
-      cors: {
-        origin: process.env.CORS_ORIGIN || '*',
-        methods: ['GET', 'POST'],
-      },
-    });
-
-    // Auth middleware
-    this.io.use(async (socket, next) => {
-      try {
-        const token = socket.handshake.auth.token;
-        if (!token) {
-          return next(new Error('Authentication required'));
-        }
-
-        const payload = authService.verifyAccessToken(token);
-        (socket as AuthenticatedSocket).userId = payload.userId;
-        (socket as AuthenticatedSocket).userEmail = payload.email;
-        next();
-      } catch (error) {
-        next(new Error('Invalid token'));
-      }
-    });
-
-    this.io.on('connection', (socket: Socket) => {
-      const authSocket = socket as AuthenticatedSocket;
-      const userId = authSocket.userId;
-
-      // Track socket for user
-      if (!this.userSockets.has(userId)) {
-        this.userSockets.set(userId, new Set());
-      }
-      this.userSockets.get(userId)!.add(socket.id);
-
-      logger.info('WebSocket connected', { userId, socketId: socket.id });
-
-      // Join user-specific room
-      socket.join(`user:${userId}`);
-
-      socket.on('disconnect', () => {
-        this.userSockets.get(userId)?.delete(socket.id);
-        if (this.userSockets.get(userId)?.size === 0) {
-          this.userSockets.delete(userId);
-        }
-        logger.info('WebSocket disconnected', { userId, socketId: socket.id });
-      });
-    });
-  }
-
-  // Send event to all of a user's connected sockets
-  emitToUser(userId: string, event: AgentEvent) {
-    this.io.to(`user:${userId}`).emit('agent:event', event);
-  }
-
-  // Send event for a specific run
-  emitToRun(userId: string, runId: string, event: AgentEvent) {
-    this.io.to(`user:${userId}`).emit(`run:${runId}`, event);
-  }
-
-  isUserConnected(userId: string): boolean {
-    return this.userSockets.has(userId) && this.userSockets.get(userId)!.size > 0;
-  }
-}
-```
-
-### Day 4-5: Event Stream Adapter
-
-**Create `apps/backend/src/adapters/event-stream/websocket-adapter.ts`:**
-```typescript
-import { EventStreamPort } from '../../ports/EventStreamPort';
-import { SocketServer } from '../../api/ws/socket-server';
-import type { AgentEvent } from '@project-jarvis/shared-types';
-
-export class WebSocketEventStreamAdapter implements EventStreamPort {
-  constructor(private socketServer: SocketServer) {}
-
-  async publish(userId: string, runId: string, event: AgentEvent): Promise<void> {
-    this.socketServer.emitToRun(userId, runId, event);
-  }
-
-  async publishToken(userId: string, runId: string, token: string): Promise<void> {
-    await this.publish(userId, runId, { type: 'agent.token', token });
-  }
-
-  async publishToolCall(userId: string, runId: string, toolId: string, input: unknown): Promise<void> {
-    await this.publish(userId, runId, { type: 'agent.tool_call', toolId, input });
-  }
-
-  async publishToolResult(userId: string, runId: string, toolId: string, output: unknown): Promise<void> {
-    await this.publish(userId, runId, { type: 'agent.tool_result', toolId, output });
-  }
-
-  async publishFinal(userId: string, runId: string, content: string): Promise<void> {
-    await this.publish(userId, runId, { type: 'agent.final', content });
-  }
-
-  async publishError(userId: string, runId: string, message: string): Promise<void> {
-    await this.publish(userId, runId, { type: 'agent.error', message });
-  }
-}
-```
+**If WebSocket is still needed for other features:**
+- Install socket.io: `pnpm add socket.io`
+- Create `apps/backend/src/api/ws/socket-server.ts`
 
 ### Files to Create This Week
 
@@ -1094,15 +309,15 @@ export class WebSocketEventStreamAdapter implements EventStreamPort {
 apps/backend/src/
   adapters/
     storage/
-      agent-run-repository.ts
-      message-repository.ts
-      tool-call-repository.ts
+      agent-run-repository.ts     # NOT STARTED (Postgres)
+      message-repository.ts       # NOT STARTED (Postgres)
+      tool-call-repository.ts     # NOT STARTED (Postgres)
     event-stream/
-      websocket-adapter.ts
+      websocket-adapter.ts        # NOT NEEDED (using SSE)
   api/ws/
-    socket-server.ts
+    socket-server.ts              # NOT NEEDED (using SSE)
   ports/
-    EventStreamPort.ts
+    EventStreamPort.ts            # DONE
 ```
 
 ---
@@ -1114,269 +329,58 @@ apps/backend/src/
 - Create memory and KG repositories
 - Implement vector search queries
 
+### Status: COMPLETE (except rate limiting - deferred)
+
 ### Day 1-2: pgvector Setup
 
-**Create migration for vector indexes:**
-```sql
--- Create HNSW index for fast similarity search
-CREATE INDEX IF NOT EXISTS memories_embedding_idx 
-ON memories USING hnsw (embedding vector_cosine_ops);
+**Status: DONE**
 
-CREATE INDEX IF NOT EXISTS kg_entities_embedding_idx 
-ON kg_entities USING hnsw (embedding vector_cosine_ops);
-```
+Migration created at `apps/backend/src/infrastructure/db/migrations/003_vector_indexes.sql`:
+- Enables pgvector extension
+- Creates HNSW indexes for `memories` and `kg_entities` tables
+- HNSW parameters: `m = 16, ef_construction = 64`
+- Additional B-tree indexes for common query patterns
 
-**Create `apps/backend/src/adapters/storage/memory-repository.ts`:**
-```typescript
-import { eq, sql, desc } from 'drizzle-orm';
-import { db } from '../../infrastructure/db/client';
-import { memories } from '../../infrastructure/db/schema';
+### Day 3-4: Memory & Knowledge Graph Repositories
 
-export class MemoryRepository {
-  async create(userId: string, content: string, embedding: number[], metadata?: Record<string, unknown>) {
-    const result = await db.insert(memories).values({
-      userId,
-      content,
-      embedding: JSON.stringify(embedding), // pgvector accepts array or string
-      metadata: metadata || {},
-    }).returning();
-    return result[0];
-  }
+**Status: DONE**
 
-  async search(userId: string, embedding: number[], limit = 10, threshold = 0.7) {
-    // Cosine similarity search using pgvector
-    const results = await db.execute(sql`
-      SELECT 
-        id, 
-        content, 
-        metadata, 
-        created_at,
-        1 - (embedding <=> ${JSON.stringify(embedding)}::vector) as similarity
-      FROM memories
-      WHERE user_id = ${userId}
-        AND 1 - (embedding <=> ${JSON.stringify(embedding)}::vector) > ${threshold}
-      ORDER BY embedding <=> ${JSON.stringify(embedding)}::vector
-      LIMIT ${limit}
-    `);
-    
-    return results.rows;
-  }
+**Memory Store:**
+- `apps/backend/src/adapters/memory/PgMemoryStore.ts` - Main implementation
+- `apps/backend/src/adapters/storage/memory-repository.ts` - Low-level CRUD with vector search
+- Uses `<=>` cosine distance operator for similarity search
+- Implements `MemoryStorePort` interface
 
-  async findByUser(userId: string, limit = 50, offset = 0) {
-    return db.select()
-      .from(memories)
-      .where(eq(memories.userId, userId))
-      .orderBy(desc(memories.createdAt))
-      .limit(limit)
-      .offset(offset);
-  }
-
-  async delete(id: string, userId: string) {
-    await db.delete(memories)
-      .where(sql`id = ${id} AND user_id = ${userId}`);
-  }
-}
-```
-
-### Day 3-4: Knowledge Graph Repository
-
-**Create `apps/backend/src/adapters/storage/kg-repository.ts`:**
-```typescript
-import { eq, and, or, sql } from 'drizzle-orm';
-import { db } from '../../infrastructure/db/client';
-import { kgEntities, kgRelations } from '../../infrastructure/db/schema';
-
-export class KGEntityRepository {
-  async create(userId: string, type: string, name: string, properties?: Record<string, unknown>, embedding?: number[]) {
-    const result = await db.insert(kgEntities).values({
-      userId,
-      type,
-      name,
-      properties: properties || {},
-      embedding: embedding ? JSON.stringify(embedding) : null,
-    }).returning();
-    return result[0];
-  }
-
-  async findById(id: string) {
-    const result = await db.select().from(kgEntities).where(eq(kgEntities.id, id)).limit(1);
-    return result[0] || null;
-  }
-
-  async findByUser(userId: string, type?: string) {
-    let query = db.select().from(kgEntities).where(eq(kgEntities.userId, userId));
-    if (type) {
-      query = query.where(and(eq(kgEntities.userId, userId), eq(kgEntities.type, type)));
-    }
-    return query;
-  }
-
-  async searchByEmbedding(userId: string, embedding: number[], limit = 10) {
-    const results = await db.execute(sql`
-      SELECT 
-        id, type, name, properties, created_at,
-        1 - (embedding <=> ${JSON.stringify(embedding)}::vector) as similarity
-      FROM kg_entities
-      WHERE user_id = ${userId}
-        AND embedding IS NOT NULL
-      ORDER BY embedding <=> ${JSON.stringify(embedding)}::vector
-      LIMIT ${limit}
-    `);
-    return results.rows;
-  }
-
-  async update(id: string, data: { name?: string; properties?: Record<string, unknown> }) {
-    const result = await db.update(kgEntities)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(kgEntities.id, id))
-      .returning();
-    return result[0];
-  }
-
-  async delete(id: string) {
-    await db.delete(kgEntities).where(eq(kgEntities.id, id));
-  }
-}
-
-export class KGRelationRepository {
-  async create(userId: string, sourceId: string, targetId: string, type: string, properties?: Record<string, unknown>) {
-    const result = await db.insert(kgRelations).values({
-      userId,
-      sourceId,
-      targetId,
-      type,
-      properties: properties || {},
-    }).returning();
-    return result[0];
-  }
-
-  async findByEntity(entityId: string) {
-    return db.select()
-      .from(kgRelations)
-      .where(or(
-        eq(kgRelations.sourceId, entityId),
-        eq(kgRelations.targetId, entityId)
-      ));
-  }
-
-  async findRelated(entityId: string, relationType?: string, depth = 1) {
-    // For now, single-hop traversal
-    // TODO: Implement recursive CTE for multi-hop
-    let query = db.select()
-      .from(kgRelations)
-      .where(or(
-        eq(kgRelations.sourceId, entityId),
-        eq(kgRelations.targetId, entityId)
-      ));
-    
-    if (relationType) {
-      query = query.where(eq(kgRelations.type, relationType));
-    }
-    
-    return query;
-  }
-
-  async delete(id: string) {
-    await db.delete(kgRelations).where(eq(kgRelations.id, id));
-  }
-}
-```
+**Knowledge Graph:**
+- `apps/backend/src/adapters/kg/PgKnowledgeGraph.ts` - Main implementation
+- `apps/backend/src/adapters/storage/kg-entity-repository.ts` - Entity CRUD
+- `apps/backend/src/adapters/storage/kg-relation-repository.ts` - Relation CRUD
+- BFS traversal for `getEntityWithRelations()`
+- Implements `KnowledgeGraphPort` interface
 
 ### Day 4-5: Rate Limiting
 
-**Install rate limiting packages:**
-```bash
-pnpm add rate-limiter-flexible ioredis
-```
+**Status: DEFERRED**
 
-**Create `apps/backend/src/api/middleware/rate-limit.ts`:**
-```typescript
-import { Request, Response, NextFunction } from 'express';
-import { RateLimiterRedis, RateLimiterRes } from 'rate-limiter-flexible';
-import Redis from 'ioredis';
-import { config } from '../../infrastructure/config';
-import { AppError } from '../../domain/errors';
+Rate limiting has been deferred. The `RateLimitError` class exists in `shared-types/src/errors/` and is ready for use when implemented.
 
-const redis = new Redis(config.REDIS_URL);
-
-// Global rate limiter: 100 requests per minute
-const globalLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'rl:global',
-  points: 100,
-  duration: 60,
-});
-
-// Per-user rate limiter: 30 requests per minute
-const userLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'rl:user',
-  points: 30,
-  duration: 60,
-});
-
-// Agent run limiter: 10 concurrent runs per user
-const agentRunLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: 'rl:agent',
-  points: 10,
-  duration: 60 * 60, // 1 hour
-});
-
-export async function globalRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  try {
-    const key = req.ip || 'unknown';
-    await globalLimiter.consume(key);
-    next();
-  } catch (error) {
-    if (error instanceof RateLimiterRes) {
-      res.set('Retry-After', String(Math.ceil(error.msBeforeNext / 1000)));
-      throw new AppError('RATE_LIMIT_EXCEEDED', 'Too many requests', 429);
-    }
-    throw error;
-  }
-}
-
-export async function userRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  if (!req.userId) {
-    return next();
-  }
-
-  try {
-    await userLimiter.consume(req.userId);
-    next();
-  } catch (error) {
-    if (error instanceof RateLimiterRes) {
-      res.set('Retry-After', String(Math.ceil(error.msBeforeNext / 1000)));
-      throw new AppError('RATE_LIMIT_EXCEEDED', 'Too many requests', 429);
-    }
-    throw error;
-  }
-}
-
-export async function checkAgentRunLimit(userId: string): Promise<void> {
-  try {
-    await agentRunLimiter.consume(userId);
-  } catch (error) {
-    if (error instanceof RateLimiterRes) {
-      throw new AppError('AGENT_RUN_LIMIT', 'Too many concurrent agent runs', 429);
-    }
-    throw error;
-  }
-}
-```
-
-### Files to Create This Week
+### Files Created
 
 ```
 apps/backend/src/
-  adapters/storage/
-    memory-repository.ts
-    kg-repository.ts
-  api/middleware/
-    rate-limit.ts
+  adapters/
+    memory/
+      PgMemoryStore.ts            # DONE
+      PgMemoryStore.test.ts       # DONE
+    kg/
+      PgKnowledgeGraph.ts         # DONE
+      PgKnowledgeGraph.test.ts    # DONE
+    storage/
+      memory-repository.ts        # DONE
+      kg-entity-repository.ts     # DONE
+      kg-relation-repository.ts   # DONE
   infrastructure/db/migrations/
-    0002_add_vector_indexes.sql
+    003_vector_indexes.sql        # DONE
 ```
 
 ---
@@ -1388,27 +392,88 @@ apps/backend/src/
 - Store Composio OAuth tokens
 - Add cost tracking
 
-### Key Tasks
+### Status: COMPLETE
 
-1. **Tool Permissions Table:**
-```typescript
-export const toolPermissions = pgTable('tool_permissions', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  toolId: varchar('tool_id', { length: 255 }).notNull(),
-  allowed: boolean('allowed').notNull().default(true),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+### Day 1-2: Tool Permission System
+
+**Status: DONE**
+
+Implemented per-user, per-tool access control:
+
+**Schema:**
+- `userToolPermissions` table added to `schema.ts`
+- Migration: `apps/backend/src/infrastructure/db/migrations/004_tool_permissions.sql`
+
+**Repository:**
+- `apps/backend/src/adapters/storage/tool-permission-repository.ts`
+- Methods: `hasPermission()`, `hasPermissions()`, `grantPermission()`, `revokePermission()`, `bulkGrant()`, `bulkRevoke()`
+
+**Integration:**
+- `ToolRegistry.ts` updated to use permission repository
+- `setPermissionRepository()` method for dependency injection
+- `getTools()` now filters by user permissions
+- `hasPermission()` checks database for explicit denials
+
+**API Endpoints:** `/api/v1/tool-permissions`
+- `GET /` - List user's permission entries
+- `GET /denied` - List denied tools
+- `GET /check/:toolId` - Check specific tool permission
+- `POST /` - Set permission (grant or revoke)
+- `POST /bulk` - Bulk update permissions
+- `DELETE /:toolId` - Remove permission entry (reset to default)
+
+**Permission Model:**
+- Default: all tools allowed (no entry = allowed)
+- Explicit grant: entry with `granted=true`
+- Explicit deny: entry with `granted=false`
+
+### Day 3-4: Composio OAuth Storage
+
+**Status: DONE (Infrastructure exists)**
+
+The `userSecrets` table already supports Composio tokens:
+- Provider type `'composio'` is supported
+- Secrets API at `/api/v1/secrets` provides full CRUD
+- AES-256-GCM encryption for stored values
+
+No additional Composio-specific adapter needed unless SDK integration is required.
+
+### Day 4-5: Cost Tracking
+
+**Status: DONE**
+
+Cost tracking was already 80% implemented. Added aggregation API:
+
+**API Endpoints:** `/api/v1/usage`
+- `GET /` - Aggregated usage summary (configurable date range)
+- `GET /daily` - Daily breakdown of usage
+- `GET /current-month` - Current month summary
+- `GET /runs` - Recent runs with usage details
+
+**Existing Infrastructure:**
+- `agentRuns.totalTokens` and `agentRuns.totalCost` columns
+- `AgentRunRepository.incrementUsage()` for real-time updates
+- `MODEL_PRICING` in `infrastructure/ai/config.ts`
+- `calculateModelCost()` function
+
+### Files Created
+
 ```
-
-2. **Cost Tracking in AgentRun:**
-   - Track tokens and cost per LLM call
-   - Aggregate in agent_runs table
-   - Implement per-user budget limits
-
-3. **OAuth Token Storage:**
-   - Store OAuth refresh tokens as encrypted UserSecrets
-   - Implement token refresh logic in Composio adapter
+apps/backend/src/
+  adapters/storage/
+    tool-permission-repository.ts   # DONE
+  api/http/routes/
+    tool-permissions.ts             # DONE
+    usage.ts                        # DONE
+  infrastructure/db/
+    schema.ts                       # UPDATED (userToolPermissions table)
+    migrations/
+      004_tool_permissions.sql      # DONE
+  application/services/
+    ToolRegistry.ts                 # UPDATED (permission checking)
+  api/http/
+    router.ts                       # UPDATED (new routes registered)
+```
 
 ---
 
@@ -1419,47 +484,83 @@ export const toolPermissions = pgTable('tool_permissions', {
 - Set up OpenTelemetry tracing
 - PII redaction
 
-### Key Tasks
+**Status: NOT STARTED**
 
-1. **Row-Level Security:**
-```sql
--- Enable RLS
-ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE kg_entities ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_secrets ENABLE ROW LEVEL SECURITY;
+---
 
--- Policies (example)
-CREATE POLICY memories_user_policy ON memories
-  USING (user_id = current_setting('app.current_user_id')::uuid);
-```
+## Priority Replacement Tasks
 
-2. **OpenTelemetry Setup:**
-```bash
-pnpm add @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node
-```
+The orchestrator is fully functional. Most in-memory adapters have been replaced with PostgreSQL implementations.
 
-3. **PII Redaction:**
-   - Scrub emails, phone numbers, SSNs before storing in memories
-   - Use regex patterns with replacement
+### Completed
+
+1. **~~Replace `InMemoryMemoryStore`~~** **DONE**
+   - `PgMemoryStore` implementing `MemoryStorePort`
+   - Uses pgvector for semantic search
+   - Located at `apps/backend/src/adapters/memory/PgMemoryStore.ts`
+
+2. **~~Replace `InMemoryKnowledgeGraph`~~** **DONE**
+   - `PgKnowledgeGraph` implementing `KnowledgeGraphPort`
+   - Uses BFS for graph traversal
+   - Located at `apps/backend/src/adapters/kg/PgKnowledgeGraph.ts`
+
+3. **~~Add User Secrets Management~~** **DONE**
+   - Secrets API at `/api/v1/secrets`
+   - AES-256-GCM encryption
+   - Full CRUD operations
+
+4. **~~Tool Permissions~~** **DONE**
+   - Per-user per-tool access control
+   - API at `/api/v1/tool-permissions`
+   - Integrated with `ToolRegistry`
+
+5. **~~Cost Tracking API~~** **DONE**
+   - Usage aggregation at `/api/v1/usage`
+   - Daily/monthly breakdowns
+
+6. **~~JWT Authentication~~** **DONE**
+   - `AuthService` with bcrypt password hashing (12 rounds)
+   - JWT access tokens with configurable expiry
+   - Refresh token rotation with SHA-256 hashed storage
+   - Real JWT validation in auth middleware
+   - 24 passing integration tests
+
+### High Priority (Remaining)
+
+1. **Replace `InMemoryOrchestratorStateRepository`**
+   - Create `PostgresOrchestratorState` implementing `OrchestratorStatePort`
+   - Persist runs, plans, agent states
+   - Located at `apps/backend/src/adapters/orchestrator/`
+
+### Medium Priority (Remaining)
+
+2. **Add Rate Limiting**
+   - Per-IP global limits
+   - Per-user request limits
+   - Agent run concurrency limits
+   - `RateLimitError` class already exists
 
 ---
 
 ## Testing Checklist
 
 ### Unit Tests
-- [ ] Auth service (register, login, refresh, logout)
+- [x] Auth service (register, login, refresh, logout) - 24 tests in auth.test.ts
 - [ ] Secrets encryption/decryption
-- [ ] Repository CRUD operations
+- [x] Repository CRUD operations (PgMemoryStore, PgKnowledgeGraph have tests)
 - [ ] Rate limiting logic
+- [x] Tool permission repository
 
 ### Integration Tests
-- [ ] Auth flow end-to-end
-- [ ] Secrets API
-- [ ] WebSocket connection and events
-- [ ] Vector similarity search
+- [x] Auth flow end-to-end - Full coverage in auth.test.ts
+- [x] Secrets API
+- [x] SSE event streaming
+- [x] Vector similarity search (PgMemoryStore.test.ts)
+- [x] Tool permissions API
+- [x] Usage API
 
 ### Security Tests
-- [ ] JWT validation edge cases
+- [x] JWT validation edge cases - Covered in auth.test.ts
 - [ ] Secrets never logged
 - [ ] Rate limiting effectiveness
 - [ ] RLS policy enforcement
@@ -1469,14 +570,50 @@ pnpm add @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/auto-instrume
 ## Coordination with Other Developers
 
 ### With Backend Dev 2
-- **Week 1:** Agree on port interfaces
-- **Week 3:** Sync on WebSocket event format and EventStreamPort
-- **Week 4:** Sync on memory/KG repository interfaces
+- **Completed:** Port interfaces agreed upon
+- **Completed:** Event streaming (SSE) implemented
+- **Completed:** Postgres adapters for memory and KG
+- **Pending:** Postgres adapter for orchestrator state
 
 ### With Frontend Dev
-- **Week 2:** Document JWT payload and refresh flow
-- **Week 2:** Document API error response format
-- **Week 3:** Test WebSocket connection from mobile
+- **Update Needed:** Document SSE format (not WebSocket)
+- **Completed:** Tool permissions API documented
+- **Completed:** Usage API documented
+- **Completed:** JWT payload format documented (see `TokenPayload` in auth-service.ts)
+
+### JWT Token Format
+
+Access tokens contain the following payload:
+```typescript
+interface TokenPayload {
+  userId: string;  // UUID
+  email: string;   // User's email address
+}
+```
+
+Tokens are signed with `JWT_SECRET` and expire according to `JWT_ACCESS_EXPIRY` (default: 15m).
+
+### API Endpoints Summary
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/v1/auth/login` | User login |
+| `POST /api/v1/auth/register` | User registration |
+| `GET /api/v1/secrets` | List user secrets |
+| `POST /api/v1/secrets` | Create secret |
+| `PATCH /api/v1/secrets/:id` | Update secret |
+| `DELETE /api/v1/secrets/:id` | Delete secret |
+| `GET /api/v1/tool-permissions` | List tool permissions |
+| `GET /api/v1/tool-permissions/check/:toolId` | Check permission |
+| `POST /api/v1/tool-permissions` | Set permission |
+| `POST /api/v1/tool-permissions/bulk` | Bulk update |
+| `DELETE /api/v1/tool-permissions/:toolId` | Remove permission |
+| `GET /api/v1/usage` | Usage summary |
+| `GET /api/v1/usage/daily` | Daily usage |
+| `GET /api/v1/usage/current-month` | Current month |
+| `GET /api/v1/usage/runs` | Recent runs |
+| `POST /api/v1/orchestrator/run` | Start agent run (SSE) |
+| `POST /api/v1/chat` | Chat endpoint |
 
 ---
 
@@ -1496,5 +633,20 @@ pnpm drizzle-kit push:pg
 ### Start Local Services
 ```bash
 docker-compose up -d
-pnpm dev:backend
+cd apps/backend && pnpm dev
+```
+
+### Current Working Commands
+```bash
+# Build shared-types
+cd packages/shared-types && pnpm build
+
+# Build backend
+cd apps/backend && pnpm build
+
+# Run development server
+cd apps/backend && pnpm dev
+
+# Type check
+cd apps/backend && pnpm typecheck
 ```

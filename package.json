@@ -9,6 +9,9 @@
   "scripts": {
     "dev:backend": "pnpm -C apps/backend dev",
     "dev:mobile": "pnpm -C apps/mobile start",
+    "dev:mcp": "pnpm -C apps/mcp_servers dev:unified",
+    "start:mcp": "pnpm -C apps/mcp_servers start:unified",
+    "build:mcp": "pnpm -C apps/mcp_servers build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },
