@@ -21,8 +21,15 @@ import type {
 import type { MCPClientPort, MCPClientEvents } from '../../ports/MCPClientPort.js';
 import { createAuthenticatedFetch } from './MCPAuth.js';
 import { logger } from '../../infrastructure/logging/logger.js';
+import { createTracer, SpanKind, SpanStatusCode } from '../../infrastructure/observability/index.js';
 
 const log = logger.child({ module: 'MCPClientAdapter' });
+
+// =============================================================================
+// Tracing
+// =============================================================================
+
+const tracer = createTracer('mcp-client', '1.0.0');
 
 /**
  * Cache configuration for tools
@@ -260,36 +267,75 @@ export class MCPClientAdapter implements MCPClientPort {
   }
 
   async callTool(toolName: string, args: Record<string, unknown>): Promise<MCPToolResult> {
-    await this.ensureConnected();
+    return tracer.startActiveSpan(
+      `mcp.tool.call ${toolName}`,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'mcp.server.id': this.config.id,
+          'mcp.server.name': this.config.name,
+          'mcp.server.url': this.config.url,
+          'mcp.tool.name': toolName,
+          'mcp.transport': this.config.transport,
+        },
+      },
+      async (span) => {
+        await this.ensureConnected();
 
-    const startTime = Date.now();
-    this.totalRequests++;
+        const startTime = Date.now();
+        this.totalRequests++;
 
-    this.log.debug('Calling tool', { toolName, args });
+        this.log.debug('Calling tool', { toolName, args });
 
-    try {
-      const result = await this.client!.callTool({
-        name: toolName,
-        arguments: args,
-      });
+        try {
+          const result = await this.client!.callTool({
+            name: toolName,
+            arguments: args,
+          });
 
-      const latency = Date.now() - startTime;
-      this.successfulRequests++;
-      this.latencySum += latency;
-      this.consecutiveFailures = 0;
+          const latency = Date.now() - startTime;
+          this.successfulRequests++;
+          this.latencySum += latency;
+          this.consecutiveFailures = 0;
 
-      this.log.info('Tool call completed', {
-        toolName,
-        latencyMs: latency,
-        isError: result.isError,
-      });
+          // Record span metrics
+          const isError = result.isError === true;
+          span.setAttributes({
+            'mcp.tool.latency_ms': latency,
+            'mcp.tool.is_error': isError,
+          });
 
-      return this.convertSDKToolResult(result);
-    } catch (error) {
-      this.consecutiveFailures++;
-      this.handleRequestError(error, 'callTool');
-      throw error;
-    }
+          if (isError) {
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: 'Tool returned error',
+            });
+          }
+
+          this.log.info('Tool call completed', {
+            toolName,
+            latencyMs: latency,
+            isError: result.isError,
+          });
+
+          return this.convertSDKToolResult(result);
+        } catch (error) {
+          this.consecutiveFailures++;
+          this.handleRequestError(error, 'callTool');
+
+          // Record error in span
+          span.recordException(error as Error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: (error as Error).message,
+          });
+
+          throw error;
+        } finally {
+          span.end();
+        }
+      }
+    );
   }
 
   setEventHandlers(handlers: MCPClientEvents): void {

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { trace } from '@opentelemetry/api';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -19,10 +20,17 @@ class Logger {
     }
 
     private log(level: LogLevel, message: string, data?: Record<string, unknown>) {
+        // Get trace context from OpenTelemetry
+        const span = trace.getActiveSpan();
+        const spanContext = span?.spanContext();
+
         const entry = {
             timestamp: new Date().toISOString(),
             level,
             message,
+            // Include trace context for log correlation
+            trace_id: spanContext?.traceId,
+            span_id: spanContext?.spanId,
             ...this.context,
             ...data,
         };

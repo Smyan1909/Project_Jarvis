@@ -5,12 +5,17 @@
 // Load environment variables from .env file
 import 'dotenv/config';
 
+// IMPORTANT: Initialize OpenTelemetry tracing BEFORE any other imports
+// This ensures all modules are properly instrumented
+import './infrastructure/observability/tracing.js';
+
 import { createServer } from 'http';
 import { getRequestListener } from '@hono/node-server';
 import { app } from './api/http/router.js';
 import { SocketServer } from './api/ws/socket-server.js';
 import { authService } from './services/index.js';
 import { config } from './infrastructure/config/index.js';
+import { shutdownTracing } from './infrastructure/observability/index.js';
 
 // Monitoring Agent imports
 import { createWebhookRoutes } from './api/http/routes/webhooks.js';
@@ -156,6 +161,9 @@ const shutdown = async () => {
   
   // Close WebSocket connections
   await socketServer.close();
+  
+  // Shutdown OpenTelemetry (flush pending spans)
+  await shutdownTracing();
   
   // Close HTTP server
   httpServer.close(() => {
