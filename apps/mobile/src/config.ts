@@ -1,10 +1,16 @@
 // API Configuration
 export const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
-export const WS_URL = process.env.EXPO_PUBLIC_WS_URL || 'ws://localhost:3000/ws';
 
-// Demo Mode - set to true for standalone demo without backend
+// Socket.io connects to base URL (not /api path)
+export const SOCKET_URL = API_URL.replace('/api', '');
+
+// Legacy WebSocket URL - use SOCKET_URL instead for Socket.io
+export const WS_URL = process.env.EXPO_PUBLIC_WS_URL || SOCKET_URL;
+
+// Demo Mode - set EXPO_PUBLIC_DEMO_MODE=false to connect to real backend
+// Default: true (uses mock responses, no backend required)
 // When enabled, the app bypasses authentication and uses mock AI responses
-export const DEMO_MODE = true;
+export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO_MODE !== 'false';
 
 // Speech Configuration
 // Toggle between 'native' (device-native, free) and 'elevenlabs' (cloud, high-quality)

@@ -13,9 +13,14 @@
     "start:mcp": "pnpm -C apps/mcp_servers start:unified",
     "build:mcp": "pnpm -C apps/mcp_servers build",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
-    "expo": "^54.0.0"
-  }
+    "expo": "^54.0.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "version": "1.0.0"
 }

@@ -104,11 +104,14 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     'unified__execute_tool',
     'unified__suggest_tools',
     
-    // === Composio Tools - GitHub ===
-    // OAuth-managed GitHub integration
-    'COMPOSIO_SEARCH_TOOLS',
-    'COMPOSIO_MANAGE_CONNECTIONS',
-    'COMPOSIO_MULTI_EXECUTE_TOOL',
+    // === Composio MCP Tools ===
+    // Meta-tools for dynamic tool discovery and execution via Composio Tool Router
+    // These require MCP_SERVER_<N>_NAME=composio in environment variables
+    'composio__COMPOSIO_SEARCH_TOOLS',        // Search for available tools/integrations
+    'composio__COMPOSIO_MANAGE_CONNECTIONS',  // Initiate OAuth connections for apps
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',  // Execute discovered tools
+    'composio__COMPOSIO_REMOTE_WORKBENCH',    // Remote workbench for complex tasks
+    'composio__COMPOSIO_REMOTE_BASH_TOOL',    // Remote bash execution
     
     // === Legacy Local Tools (for backwards compatibility) ===
     // File operations
@@ -221,7 +224,10 @@ Focus on gathering accurate, comprehensive information.`,
 - Terminal command execution (builds, tests, package management)
 - Git operations (commit, branch, merge, push with confirmation)
 - Browser automation via Playwright (navigation, interaction, inspection)
-- GitHub integration via Composio (issues, PRs, repo management)
+- Composio Tool Router integration for 100+ external services (GitHub, Slack, Jira, etc.)
+  - Use COMPOSIO_SEARCH_TOOLS to discover available integrations
+  - Use COMPOSIO_MANAGE_CONNECTIONS to set up OAuth for apps
+  - Use COMPOSIO_MULTI_EXECUTE_TOOL to execute discovered tools
 - Complex multi-file refactoring and code generation
 You operate with high autonomy - complete tasks independently and verify with tests.`,
 

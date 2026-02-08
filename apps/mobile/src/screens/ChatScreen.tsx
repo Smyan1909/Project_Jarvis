@@ -1,3 +1,8 @@
+// =============================================================================
+// Chat Screen
+// =============================================================================
+// Main chat interface with Jarvis AI assistant.
+
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
@@ -9,14 +14,26 @@ import {
   Platform,
   StyleSheet,
   ActivityIndicator,
+  TouchableOpacity,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useAgentStream } from '../hooks/useAgentStream';
 import { useTextToSpeech } from '../hooks/useTextToSpeech';
+import { useTaskObservabilityContext } from '../features/observability/TaskObservabilityContext';
 import { SpeechPanel, SpeechPanelRef } from '../components/SpeechPanel';
-import { theme } from '../theme';
+import { TaskObservabilityPanel } from '../components/TaskObservabilityPanel';
+import { colors } from '../theme/colors';
 import { DEMO_MODE, SPEECH_CONFIG } from '../config';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// =============================================================================
+// Types
+// =============================================================================
 
 interface Message {
   id: string;
@@ -25,14 +42,23 @@ interface Message {
   isStreaming?: boolean;
 }
 
+// =============================================================================
+// Component
+// =============================================================================
+
 export function ChatScreen() {
   const [input, setInput] = useState('');
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(SPEECH_CONFIG.autoPlayResponses);
   const [currentlyPlayingId, setCurrentlyPlayingId] = useState<string | null>(null);
+  const [showObservabilityPanel, setShowObservabilityPanel] = useState(false);
+
   const { messages, isLoading, error, sendMessage } = useAgentStream();
   const { isSpeaking, speak, stop: stopSpeaking, error: ttsError } = useTextToSpeech();
+  const { state: observabilityState } = useTaskObservabilityContext();
+
   const flatListRef = useRef<FlatList>(null);
   const speechPanelRef = useRef<SpeechPanelRef>(null);
+  const panelTranslateX = useRef(new Animated.Value(SCREEN_WIDTH * 0.85)).current;
   const insets = useSafeAreaInsets();
 
   // Clear currentlyPlayingId when audio finishes
@@ -51,6 +77,37 @@ export function ChatScreen() {
     }
   }, []);
 
+  // Toggle observability panel
+  const openObservabilityPanel = useCallback(() => {
+    setShowObservabilityPanel(true);
+    Animated.spring(panelTranslateX, {
+      toValue: 0,
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start();
+  }, [panelTranslateX]);
+
+  const closeObservabilityPanel = useCallback(() => {
+    Animated.spring(panelTranslateX, {
+      toValue: SCREEN_WIDTH * 0.85,
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start(() => {
+      setShowObservabilityPanel(false);
+    });
+  }, [panelTranslateX]);
+
+  // Swipe gesture to open panel
+  const swipeGesture = Gesture.Pan()
+    .onUpdate((event) => {
+      if (event.translationX < -50 && !showObservabilityPanel) {
+        openObservabilityPanel();
+      }
+    })
+    .activeOffsetX([-20, 20]);
+
   // Send message and trigger TTS immediately when response arrives
   const handleSend = async () => {
     const trimmedInput = input.trim();
@@ -63,7 +120,7 @@ export function ChatScreen() {
     }
 
     setInput('');
-    
+
     // Pass TTS callback - will be called immediately when response is ready
     await sendMessage(trimmedInput, (responseText, messageId) => {
       if (ttsEnabled) {
@@ -81,7 +138,6 @@ export function ChatScreen() {
   }, [isSpeaking, stopSpeaking]);
 
   const handleTranscriptionConfirmed = useCallback((text: string) => {
-    // Append transcribed text to existing input (or replace if empty)
     setInput((prev) => (prev.trim() ? `${prev} ${text}` : text));
   }, []);
 
@@ -89,23 +145,26 @@ export function ChatScreen() {
     // Nothing to do - transcription was discarded
   }, []);
 
-  const handlePlayMessage = useCallback((messageId: string, content: string) => {
-    // If this message is already playing, stop it (don't restart)
-    if (currentlyPlayingId === messageId) {
+  const handlePlayMessage = useCallback(
+    (messageId: string, content: string) => {
+      // If this message is already playing, stop it
+      if (currentlyPlayingId === messageId) {
+        if (isSpeaking) {
+          stopSpeaking();
+        }
+        setCurrentlyPlayingId(null);
+        return;
+      }
+
+      // Stop any other playing message and start this one
       if (isSpeaking) {
         stopSpeaking();
       }
-      setCurrentlyPlayingId(null);
-      return;
-    }
-    
-    // Stop any other playing message and start this one
-    if (isSpeaking) {
-      stopSpeaking();
-    }
-    setCurrentlyPlayingId(messageId);
-    speak(content);
-  }, [currentlyPlayingId, isSpeaking, stopSpeaking, speak]);
+      setCurrentlyPlayingId(messageId);
+      speak(content);
+    },
+    [currentlyPlayingId, isSpeaking, stopSpeaking, speak]
+  );
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
@@ -128,7 +187,7 @@ export function ChatScreen() {
         >
           {isStreaming ? (
             <View style={styles.typingIndicator}>
-              <ActivityIndicator size="small" color={theme.colors.textTertiary} />
+              <ActivityIndicator size="small" color={colors.textTertiary} />
               <Text style={styles.typingText}>Jarvis is thinking...</Text>
             </View>
           ) : (
@@ -152,7 +211,7 @@ export function ChatScreen() {
             <Ionicons
               name={isThisMessagePlaying ? 'stop-circle-outline' : 'play-circle-outline'}
               size={20}
-              color={theme.colors.textTertiary}
+              color={colors.textTertiary}
             />
           </Pressable>
         )}
@@ -160,140 +219,176 @@ export function ChatScreen() {
     );
   };
 
+  // Check if orchestrator is active
+  const isOrchestratorActive = observabilityState.status !== 'idle';
+
   return (
-    <View style={styles.container}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-      >
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + theme.spacing.sm }]}>
-        <Text style={styles.headerTitle}>Jarvis</Text>
-        {DEMO_MODE && (
-          <View style={styles.demoBadge}>
-            <Text style={styles.demoBadgeText}>DEMO</Text>
+    <GestureDetector gesture={swipeGesture}>
+      <View style={styles.container}>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        >
+          {/* Header */}
+          <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+            <View style={styles.headerLeft}>
+              <View style={styles.logoContainer}>
+                <Ionicons name="hardware-chip" size={22} color={colors.primary} />
+              </View>
+              <Text style={styles.headerTitle}>Jarvis</Text>
+              {DEMO_MODE && (
+                <View style={styles.demoBadge}>
+                  <Text style={styles.demoBadgeText}>DEMO</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.headerRight}>
+              {/* TTS Toggle Button */}
+              <TouchableOpacity style={styles.headerButton} onPress={toggleTts}>
+                <Ionicons
+                  name={ttsEnabled ? 'volume-high' : 'volume-mute'}
+                  size={22}
+                  color={ttsEnabled ? colors.primary : colors.textTertiary}
+                />
+              </TouchableOpacity>
+              {/* Observability Panel Button */}
+              <TouchableOpacity
+                style={styles.headerButton}
+                onPress={openObservabilityPanel}
+              >
+                <Ionicons
+                  name="stats-chart"
+                  size={22}
+                  color={isOrchestratorActive ? colors.primary : colors.textSecondary}
+                />
+                {isOrchestratorActive && (
+                  <View style={styles.activeDot} />
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
-        )}
-        {/* TTS Toggle Button */}
-        <Pressable
-          style={styles.ttsToggle}
-          onPress={toggleTts}
-          hitSlop={8}
-        >
-          <Ionicons
-            name={ttsEnabled ? 'volume-high' : 'volume-mute'}
-            size={22}
-            color={ttsEnabled ? theme.colors.primary : theme.colors.textTertiary}
-          />
-        </Pressable>
-      </View>
 
-      {/* Error Banner */}
-      {error && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      )}
-
-      {/* TTS Error Banner */}
-      {ttsError && (
-        <View style={[styles.errorBanner, styles.ttsErrorBanner]}>
-          <Text style={styles.errorText}>TTS: {ttsError}</Text>
-        </View>
-      )}
-
-      {/* Messages List */}
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        style={styles.messagesList}
-        contentContainerStyle={[
-          styles.messagesContent,
-          messages.length === 0 ? styles.emptyMessagesContent : undefined,
-        ]}
-        onContentSizeChange={() => {
-          // Auto-scroll to bottom when new messages arrive
-          if (messages.length > 0) {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          }
-        }}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateTitle}>Welcome to Jarvis</Text>
-            <Text style={styles.emptyStateSubtitle}>
-              {DEMO_MODE
-                ? 'Try saying "Hello" or "What can you do?"'
-                : 'Start a conversation with your AI assistant'}
-            </Text>
-          </View>
-        }
-      />
-
-      {/* Input Area */}
-      <View style={[styles.inputContainer, { paddingBottom: insets.bottom + theme.spacing.sm }]}>
-        {/* Mic Button to open Speech Panel */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.micButton,
-            pressed && styles.micButtonPressed,
-          ]}
-          onPress={toggleSpeechPanel}
-          hitSlop={8}
-        >
-          <Ionicons
-            name="mic"
-            size={24}
-            color={theme.colors.primary}
-          />
-        </Pressable>
-        
-        <TextInput
-          style={styles.input}
-          value={input}
-          onChangeText={setInput}
-          placeholder="Message Jarvis..."
-          placeholderTextColor={theme.colors.textTertiary}
-          multiline
-          maxLength={4000}
-          editable={!isLoading}
-          onSubmitEditing={handleSend}
-          blurOnSubmit={false}
-        />
-        <Pressable
-          style={({ pressed }) => [
-            styles.sendButton,
-            (!input.trim() || isLoading) ? styles.sendButtonDisabled : undefined,
-            (pressed && input.trim() && !isLoading) ? styles.sendButtonPressed : undefined,
-          ]}
-          onPress={handleSend}
-          disabled={!input.trim() || isLoading}
-        >
-          {isLoading ? (
-            <ActivityIndicator size="small" color={theme.colors.textInverse} />
-          ) : (
-            <Text style={styles.sendButtonText}>Send</Text>
+          {/* Error Banner */}
+          {error && (
+            <View style={styles.errorBanner}>
+              <Ionicons name="alert-circle" size={18} color={colors.error} />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
           )}
-        </Pressable>
-      </View>
-      </KeyboardAvoidingView>
 
-      {/* Speech-to-Text Panel */}
-      <SpeechPanel
-        ref={speechPanelRef}
-        onTranscriptionConfirmed={handleTranscriptionConfirmed}
-        onTranscriptionCancelled={handleTranscriptionCancelled}
-      />
-    </View>
+          {/* TTS Error Banner */}
+          {ttsError && (
+            <View style={[styles.errorBanner, styles.ttsErrorBanner]}>
+              <Ionicons name="volume-mute" size={18} color={colors.warning} />
+              <Text style={[styles.errorText, styles.ttsErrorText]}>TTS: {ttsError}</Text>
+            </View>
+          )}
+
+          {/* Messages List */}
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            renderItem={renderMessage}
+            keyExtractor={(item) => item.id}
+            style={styles.messagesList}
+            contentContainerStyle={[
+              styles.messagesContent,
+              messages.length === 0 && styles.emptyMessagesContent,
+            ]}
+            onContentSizeChange={() => {
+              if (messages.length > 0) {
+                flatListRef.current?.scrollToEnd({ animated: true });
+              }
+            }}
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <View style={styles.emptyIconContainer}>
+                  <Ionicons name="hardware-chip" size={48} color={colors.primary} />
+                </View>
+                <Text style={styles.emptyStateTitle}>Welcome to Jarvis</Text>
+                <Text style={styles.emptyStateSubtitle}>
+                  {DEMO_MODE
+                    ? 'Try saying "Hello" or "What can you do?"'
+                    : 'Start a conversation with your AI assistant'}
+                </Text>
+                <View style={styles.swipeHint}>
+                  <Ionicons name="arrow-back" size={16} color={colors.textTertiary} />
+                  <Text style={styles.swipeHintText}>Swipe left to view task monitor</Text>
+                </View>
+              </View>
+            }
+            showsVerticalScrollIndicator={false}
+          />
+
+          {/* Input Area */}
+          <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 8 }]}>
+            {/* Mic Button */}
+            <TouchableOpacity
+              style={styles.micButton}
+              onPress={toggleSpeechPanel}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="mic" size={22} color={colors.primary} />
+            </TouchableOpacity>
+
+            <TextInput
+              style={styles.input}
+              value={input}
+              onChangeText={setInput}
+              placeholder="Message Jarvis..."
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              maxLength={4000}
+              editable={!isLoading}
+              onSubmitEditing={handleSend}
+              blurOnSubmit={false}
+            />
+
+            <TouchableOpacity
+              style={[
+                styles.sendButton,
+                (!input.trim() || isLoading) && styles.sendButtonDisabled,
+              ]}
+              onPress={handleSend}
+              disabled={!input.trim() || isLoading}
+              activeOpacity={0.8}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color={colors.textInverse} />
+              ) : (
+                <Ionicons name="send" size={18} color={colors.textInverse} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+
+        {/* Speech-to-Text Panel */}
+        <SpeechPanel
+          ref={speechPanelRef}
+          onTranscriptionConfirmed={handleTranscriptionConfirmed}
+          onTranscriptionCancelled={handleTranscriptionCancelled}
+        />
+
+        {/* Task Observability Panel */}
+        <TaskObservabilityPanel
+          visible={showObservabilityPanel}
+          onClose={closeObservabilityPanel}
+          translateX={panelTranslateX}
+        />
+      </View>
+    </GestureDetector>
   );
 }
+
+// =============================================================================
+// Styles
+// =============================================================================
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: colors.background,
   },
   flex: {
     flex: 1,
@@ -301,48 +396,96 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: theme.spacing.md,
-    paddingHorizontal: theme.spacing.md,
-    backgroundColor: theme.colors.background,
+    justifyContent: 'space-between',
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    backgroundColor: colors.background,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.borderLight,
+    borderBottomColor: colors.border,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  logoContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.backgroundSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.primary,
   },
   headerTitle: {
-    ...theme.typography.h3,
-    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.backgroundSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  activeDot: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.success,
+    borderWidth: 2,
+    borderColor: colors.background,
   },
   demoBadge: {
-    marginLeft: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 2,
-    backgroundColor: theme.colors.warning,
-    borderRadius: theme.borderRadius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: colors.warning,
+    borderRadius: 6,
   },
   demoBadgeText: {
-    ...theme.typography.captionSmall,
-    color: theme.colors.textInverse,
+    fontSize: 10,
     fontWeight: '700',
+    color: colors.textInverse,
   },
   errorBanner: {
-    backgroundColor: theme.colors.error,
-    paddingVertical: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.error}15`,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.error,
   },
   ttsErrorBanner: {
-    backgroundColor: theme.colors.warning,
+    backgroundColor: `${colors.warning}15`,
+    borderBottomColor: colors.warning,
   },
   errorText: {
-    ...theme.typography.bodySmall,
-    color: theme.colors.textInverse,
-    textAlign: 'center',
+    fontSize: 13,
+    color: colors.error,
+    flex: 1,
+  },
+  ttsErrorText: {
+    color: colors.warning,
   },
   messagesList: {
     flex: 1,
   },
   messagesContent: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   emptyMessagesContent: {
     flex: 1,
@@ -350,21 +493,44 @@ const styles = StyleSheet.create({
   },
   emptyState: {
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.xl,
+    paddingHorizontal: 40,
+  },
+  emptyIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.backgroundSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+    borderWidth: 2,
+    borderColor: colors.primary,
   },
   emptyStateTitle: {
-    ...theme.typography.h2,
-    color: theme.colors.text,
-    marginBottom: theme.spacing.sm,
+    fontSize: 22,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 8,
     textAlign: 'center',
   },
   emptyStateSubtitle: {
-    ...theme.typography.body,
-    color: theme.colors.textSecondary,
+    fontSize: 15,
+    color: colors.textSecondary,
     textAlign: 'center',
+    lineHeight: 22,
+  },
+  swipeHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 32,
+    gap: 6,
+  },
+  swipeHintText: {
+    fontSize: 12,
+    color: colors.textTertiary,
   },
   messageWrapper: {
-    marginVertical: theme.spacing.xs,
+    marginVertical: 4,
     maxWidth: '85%',
   },
   userMessageWrapper: {
@@ -374,99 +540,87 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   messageBubble: {
-    paddingVertical: theme.spacing.sm,
-    paddingHorizontal: theme.spacing.md,
-    borderRadius: theme.borderRadius.lg,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 16,
   },
   userBubble: {
-    backgroundColor: theme.colors.userBubble,
-    borderBottomRightRadius: theme.borderRadius.sm,
+    backgroundColor: colors.userBubble,
+    borderBottomRightRadius: 4,
   },
   assistantBubble: {
-    backgroundColor: theme.colors.assistantBubble,
-    borderBottomLeftRadius: theme.borderRadius.sm,
+    backgroundColor: colors.assistantBubble,
+    borderBottomLeftRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   messageText: {
-    ...theme.typography.body,
+    fontSize: 15,
+    lineHeight: 22,
   },
   userMessageText: {
-    color: theme.colors.userBubbleText,
+    color: colors.userBubbleText,
   },
   assistantMessageText: {
-    color: theme.colors.assistantBubbleText,
+    color: colors.assistantBubbleText,
   },
   typingIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
   },
   typingText: {
-    ...theme.typography.bodySmall,
-    color: theme.colors.textTertiary,
-    marginLeft: theme.spacing.sm,
+    fontSize: 13,
+    color: colors.textTertiary,
     fontStyle: 'italic',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.sm,
-    backgroundColor: theme.colors.background,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    backgroundColor: colors.background,
     borderTopWidth: 1,
-    borderTopColor: theme.colors.borderLight,
-    gap: theme.spacing.sm,
+    borderTopColor: colors.border,
+    gap: 8,
   },
   input: {
     flex: 1,
     minHeight: 44,
     maxHeight: 120,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.xl,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    backgroundColor: theme.colors.backgroundSecondary,
-    ...theme.typography.body,
-    color: theme.colors.text,
+    borderColor: colors.border,
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: colors.backgroundSecondary,
+    fontSize: 15,
+    color: colors.text,
   },
   sendButton: {
+    width: 44,
     height: 44,
-    paddingHorizontal: theme.spacing.lg,
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.xl,
+    backgroundColor: colors.primary,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendButtonDisabled: {
-    backgroundColor: theme.colors.textTertiary,
-  },
-  sendButtonPressed: {
-    backgroundColor: theme.colors.primaryDark,
-  },
-  sendButtonText: {
-    ...theme.typography.button,
-    color: theme.colors.textInverse,
-  },
-  ttsToggle: {
-    position: 'absolute',
-    right: theme.spacing.md,
-    padding: theme.spacing.xs,
+    backgroundColor: colors.backgroundTertiary,
   },
   playButton: {
-    marginTop: theme.spacing.xs,
+    marginTop: 4,
     alignSelf: 'flex-start',
-    padding: theme.spacing.xs,
+    padding: 4,
   },
   micButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: theme.colors.backgroundSecondary,
+    backgroundColor: colors.backgroundSecondary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  micButtonPressed: {
-    backgroundColor: theme.colors.primaryLight,
+    borderColor: colors.border,
   },
 });
