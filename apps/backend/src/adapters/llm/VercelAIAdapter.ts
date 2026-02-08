@@ -18,6 +18,13 @@ import type {
 import { getLanguageModel } from '../../infrastructure/ai/registry.js';
 import { calculateModelCost } from '../../infrastructure/ai/config.js';
 import { convertToolDefinitions } from './tools.js';
+import { createTracer, SpanKind, SpanStatusCode, context, trace } from '../../infrastructure/observability/index.js';
+
+// =============================================================================
+// Tracing
+// =============================================================================
+
+const tracer = createTracer('llm-provider', '1.0.0');
 
 /**
  * LLM Provider adapter using Vercel AI SDK
@@ -53,27 +60,65 @@ export class VercelAIAdapter implements LLMProviderPort {
     options?: GenerateOptions
   ): Promise<LLMResponse> {
     const modelId = options?.model ?? this.modelId;
-    const model = getLanguageModel(modelId);
+    const [provider] = modelId.split(':');
 
-    const result = await generateText({
-      model,
-      messages: this.convertMessagesToCore(messages),
-      system: options?.systemPrompt,
-      temperature: options?.temperature,
-      maxTokens: options?.maxTokens,
-      tools: options?.tools ? convertToolDefinitions(options.tools) : undefined,
-    });
-
-    return {
-      content: result.text || null,
-      toolCalls: this.extractToolCalls(result.toolCalls),
-      usage: {
-        promptTokens: result.usage.promptTokens,
-        completionTokens: result.usage.completionTokens,
-        totalTokens: result.usage.totalTokens,
+    return tracer.startActiveSpan(
+      `llm.generate ${modelId}`,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'gen_ai.system': provider,
+          'gen_ai.request.model': modelId,
+          'gen_ai.request.temperature': options?.temperature,
+          'gen_ai.request.max_tokens': options?.maxTokens,
+          'gen_ai.request.message_count': messages.length,
+          'gen_ai.request.has_tools': options?.tools ? options.tools.length > 0 : false,
+        },
       },
-      finishReason: this.mapFinishReason(result.finishReason),
-    };
+      async (span) => {
+        try {
+          const model = getLanguageModel(modelId);
+
+          const result = await generateText({
+            model,
+            messages: this.convertMessagesToCore(messages),
+            system: options?.systemPrompt,
+            temperature: options?.temperature,
+            maxTokens: options?.maxTokens,
+            tools: options?.tools ? convertToolDefinitions(options.tools) : undefined,
+          });
+
+          // Record usage metrics
+          span.setAttributes({
+            'gen_ai.usage.prompt_tokens': result.usage.promptTokens,
+            'gen_ai.usage.completion_tokens': result.usage.completionTokens,
+            'gen_ai.usage.total_tokens': result.usage.totalTokens,
+            'gen_ai.response.finish_reason': result.finishReason,
+            'gen_ai.response.tool_calls': result.toolCalls?.length || 0,
+          });
+
+          return {
+            content: result.text || null,
+            toolCalls: this.extractToolCalls(result.toolCalls),
+            usage: {
+              promptTokens: result.usage.promptTokens,
+              completionTokens: result.usage.completionTokens,
+              totalTokens: result.usage.totalTokens,
+            },
+            finishReason: this.mapFinishReason(result.finishReason),
+          };
+        } catch (error) {
+          span.recordException(error as Error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: (error as Error).message,
+          });
+          throw error;
+        } finally {
+          span.end();
+        }
+      }
+    );
   }
 
   /**
@@ -84,16 +129,37 @@ export class VercelAIAdapter implements LLMProviderPort {
     options?: GenerateOptions
   ): AsyncGenerator<StreamChunk, void, unknown> {
     const modelId = options?.model ?? this.modelId;
+    const [provider] = modelId.split(':');
     const model = getLanguageModel(modelId);
 
-    const result = streamText({
-      model,
-      messages: this.convertMessagesToCore(messages),
-      system: options?.systemPrompt,
-      temperature: options?.temperature,
-      maxTokens: options?.maxTokens,
-      tools: options?.tools ? convertToolDefinitions(options.tools) : undefined,
+    // Create span for the entire stream operation
+    const span = tracer.startSpan(`llm.stream ${modelId}`, {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        'gen_ai.system': provider,
+        'gen_ai.request.model': modelId,
+        'gen_ai.request.temperature': options?.temperature,
+        'gen_ai.request.max_tokens': options?.maxTokens,
+        'gen_ai.request.message_count': messages.length,
+        'gen_ai.request.streaming': true,
+        'gen_ai.request.has_tools': options?.tools ? options.tools.length > 0 : false,
+      },
     });
+
+    // Run the stream in the span's context
+    const ctx = trace.setSpan(context.active(), span);
+
+    try {
+      const result = context.with(ctx, () =>
+        streamText({
+          model,
+          messages: this.convertMessagesToCore(messages),
+          system: options?.systemPrompt,
+          temperature: options?.temperature,
+          maxTokens: options?.maxTokens,
+          tools: options?.tools ? convertToolDefinitions(options.tools) : undefined,
+        })
+      );
 
     // Track accumulated data for final response
     let accumulatedText = '';
@@ -140,6 +206,16 @@ export class VercelAIAdapter implements LLMProviderPort {
           // Get final usage - need to await the promises
           const usage = await result.usage;
           const finishReason = await result.finishReason;
+
+          // Record span metrics
+          span.setAttributes({
+            'gen_ai.usage.prompt_tokens': usage.promptTokens,
+            'gen_ai.usage.completion_tokens': usage.completionTokens,
+            'gen_ai.usage.total_tokens': usage.totalTokens,
+            'gen_ai.response.finish_reason': finishReason,
+            'gen_ai.response.tool_calls': toolCalls.length,
+            'gen_ai.stream.event_count': eventCount,
+          });
           
           yield {
             type: 'done',
@@ -158,7 +234,10 @@ export class VercelAIAdapter implements LLMProviderPort {
 
         case 'error':
           console.error(`[VercelAIAdapter] Stream error:`, (part as { type: 'error'; error: unknown }).error);
-          throw (part as { type: 'error'; error: unknown }).error;
+          const streamError = (part as { type: 'error'; error: unknown }).error;
+          span.recordException(streamError as Error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: String(streamError) });
+          throw streamError;
       }
     }
 
@@ -169,6 +248,17 @@ export class VercelAIAdapter implements LLMProviderPort {
       console.warn('[VercelAIAdapter] Stream ended without finish event, emitting done with accumulated data');
       const usage = await result.usage;
       const finishReason = await result.finishReason;
+
+      // Record span metrics
+      span.setAttributes({
+        'gen_ai.usage.prompt_tokens': usage?.promptTokens ?? 0,
+        'gen_ai.usage.completion_tokens': usage?.completionTokens ?? 0,
+        'gen_ai.usage.total_tokens': usage?.totalTokens ?? 0,
+        'gen_ai.response.finish_reason': finishReason ?? 'unknown',
+        'gen_ai.response.tool_calls': toolCalls.length,
+        'gen_ai.stream.event_count': eventCount,
+        'gen_ai.stream.early_end': true,
+      });
       
       yield {
         type: 'done',
@@ -183,6 +273,20 @@ export class VercelAIAdapter implements LLMProviderPort {
           finishReason: this.mapFinishReason(finishReason ?? 'stop'),
         },
       };
+    }
+
+    // End the span when stream completes successfully
+    span.end();
+
+    } catch (error) {
+      // Record error and end span
+      span.recordException(error as Error);
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: (error as Error).message,
+      });
+      span.end();
+      throw error;
     }
   }
 

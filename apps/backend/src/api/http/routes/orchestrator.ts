@@ -25,6 +25,7 @@ import {
 } from '../../../application/services/ToolRegistry.js';
 import { registerMemoryTools, registerKnowledgeGraphTools } from '../../../application/services/MemoryTools.js';
 import { registerWebTools } from '../../../application/services/WebTools.js';
+import { registerSessionTools } from '../../../application/services/SessionTools.js';
 
 // Adapters
 import {
@@ -201,6 +202,9 @@ async function initializeToolRegistry(): Promise<void> {
 
   // Knowledge graph tools (kg_create_entity, kg_create_relation, kg_query, kg_get_entity)
   registerKnowledgeGraphTools(toolRegistry, knowledgeGraph);
+
+  // Session continuity tools (session_start, session_end, session_capture_*, session_recall, etc.)
+  registerSessionTools(toolRegistry, knowledgeGraph);
 
   // Web tools (web_search, web_fetch)
   registerWebTools(toolRegistry);
