@@ -7,7 +7,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { orchestratorApi } from '../services/api';
 import { getMockResponse } from '../services/mockAgent';
 import { useTaskObservability } from './useTaskObservability';
-import { DEMO_MODE } from '../config';
+import { DEMO_MODE, LOAD_HISTORY_ON_STARTUP } from '../config';
 import type { StreamEvent } from '../services/websocket';
 
 // =============================================================================
@@ -107,9 +107,10 @@ export function useAgentStream(): UseAgentStreamResult {
 
   const { processEvent, startRun, clearRun, status: orchestratorStatus } = useTaskObservability();
 
-  // Load conversation history on mount
+  // Load conversation history on mount (if enabled)
   useEffect(() => {
     if (DEMO_MODE) return;
+    if (!LOAD_HISTORY_ON_STARTUP) return;
     
     orchestratorApi.getHistory(50)
       .then((data) => {
