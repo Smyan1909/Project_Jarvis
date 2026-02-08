@@ -27,11 +27,6 @@ export function convertToolDefinitions(
   const toolSet: Record<string, CoreTool> = {};
 
   for (const t of tools) {
-    // Debug logging for problematic tool
-    if (t.name.includes('COMPOSIO_MULTI_EXECUTE_TOOL')) {
-      console.log('[Tools] COMPOSIO_MULTI_EXECUTE_TOOL input schema:', JSON.stringify(t.parameters, null, 2));
-    }
-    
     toolSet[t.name] = tool({
       description: t.description,
       parameters: convertParametersToZod(t.parameters),
@@ -112,14 +107,17 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
       }
       break;
 
-    case 'object':
+    case 'object': {
+      const hasProps = param.properties && Object.keys(param.properties).length > 0;
+      const hasAdditionalProps = param.additionalProperties === true;
+      
       // Handle nested objects with defined properties
-      if (param.properties && Object.keys(param.properties).length > 0) {
+      if (hasProps) {
         const shape: z.ZodRawShape = {};
         
         // OpenAI strict mode requires ALL properties to be required
         // So we make all fields required in the Zod schema
-        for (const [key, nestedParam] of Object.entries(param.properties)) {
+        for (const [key, nestedParam] of Object.entries(param.properties!)) {
           shape[key] = convertParameterToZod(nestedParam);
         }
 
@@ -127,15 +125,17 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
         // If the source schema has additionalProperties: true but also has defined properties,
         // we ignore the additionalProperties and use strict() to satisfy OpenAI
         schema = z.object(shape).strict();
-      } else if (param.additionalProperties === true) {
+      } else if (hasAdditionalProps) {
         // For objects with no defined properties but additionalProperties: true (dynamic objects)
         // OpenAI does NOT support additionalProperties: true in strict mode
         // Convert to a JSON string that the model will populate with a JSON object
         // The caller will need to JSON.parse() this string
+        const jsonInstruction = '(Provide as a JSON string, e.g. {"key": "value"})';
         schema = z.string().describe(
-          (param.description ? param.description + ' ' : '') + 
-          '(Provide as a JSON string, e.g. {"key": "value"})'
+          (param.description ? param.description + ' ' : '') + jsonInstruction
         );
+        // Return early to avoid overwriting the description with just param.description
+        return schema;
       } else {
         // For objects without defined properties and additionalProperties is false or undefined
         // OpenAI requires additionalProperties: false, so use strict() on an empty object
@@ -143,6 +143,7 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
         schema = z.object({}).strict();
       }
       break;
+    }
 
     default:
       schema = z.string(); // Default to string instead of unknown

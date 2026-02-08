@@ -223,7 +223,17 @@ export class MCPClientManager implements MCPClientManagerPort {
     args: Record<string, unknown>
   ): Promise<{ success: boolean; output: unknown; error?: string }> {
     try {
-      const result = await this.invokeTool(toolId, args);
+      // Only preprocess args for COMPOSIO_MULTI_EXECUTE_TOOL
+      // This tool has an 'arguments' field that we converted to a JSON string for OpenAI compatibility
+      // Other tools like unified__execute_tool have argsJson which should remain a string
+      let processedArgs = args;
+      if (toolId.includes('COMPOSIO_MULTI_EXECUTE_TOOL')) {
+        log.debug('Preprocessing Composio tool args', { toolId, args: JSON.stringify(args) });
+        processedArgs = this.preprocessComposioArgs(args);
+        log.debug('Processed Composio args', { toolId, processedArgs: JSON.stringify(processedArgs) });
+      }
+      
+      const result = await this.invokeTool(toolId, processedArgs);
       return convertMCPToolResult(result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -234,6 +244,53 @@ export class MCPClientManager implements MCPClientManagerPort {
         error: errorMessage,
       };
     }
+  }
+
+  /**
+   * Preprocess COMPOSIO_MULTI_EXECUTE_TOOL arguments.
+   * 
+   * This tool has a 'tools' array where each item has an 'arguments' field.
+   * We converted the 'arguments' field to a JSON string for OpenAI strict mode compatibility.
+   * Now we need to parse those JSON strings back to objects for the MCP tool.
+   */
+  private preprocessComposioArgs(args: Record<string, unknown>): Record<string, unknown> {
+    const processed: Record<string, unknown> = { ...args };
+    
+    // The COMPOSIO_MULTI_EXECUTE_TOOL has a 'tools' array
+    if (Array.isArray(args.tools)) {
+      processed.tools = args.tools.map((toolItem: unknown) => {
+        if (typeof toolItem !== 'object' || toolItem === null) {
+          return toolItem;
+        }
+        
+        const item = toolItem as Record<string, unknown>;
+        const processedItem: Record<string, unknown> = { ...item };
+        
+        // Parse the 'arguments' field if it's a JSON string
+        if (typeof item.arguments === 'string') {
+          const trimmed = item.arguments.trim();
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+              processedItem.arguments = JSON.parse(item.arguments);
+              log.debug('Parsed Composio arguments JSON string', { 
+                toolSlug: item.tool_slug,
+                originalLength: item.arguments.length 
+              });
+            } catch {
+              // Keep as string if parsing fails
+              log.warn('Failed to parse Composio arguments JSON', { 
+                toolSlug: item.tool_slug,
+                value: item.arguments.slice(0, 100) 
+              });
+            }
+          }
+        }
+        
+        return processedItem;
+      });
+    }
+    
+    return processed;
   }
 
   async refreshConfigurations(): Promise<void> {
