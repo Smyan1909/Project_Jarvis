@@ -3,7 +3,7 @@
 // =============================================================================
 // Hook for processing StreamEvents and updating task observability state.
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import {
   useTaskObservabilityContext,
   TaskInfo,
@@ -33,6 +33,10 @@ function parseOrchestratorStatus(status: string): OrchestratorStatus {
 
 export function useTaskObservability() {
   const { state, dispatch, resetState, addActivity } = useTaskObservabilityContext();
+
+  // Use ref to avoid stale closure issues with activeAgents in callbacks
+  const activeAgentsRef = useRef(state.activeAgents);
+  activeAgentsRef.current = state.activeAgents;
 
   /**
    * Process a StreamEvent and update observability state accordingly.
@@ -207,7 +211,7 @@ export function useTaskObservability() {
           addActivity('tool_call', `Using tool: ${eventData.toolName}`);
 
           // Update agent's current action
-          const agentIdForToolCall = findAgentByToolCall(state.activeAgents);
+          const agentIdForToolCall = findAgentByToolCall(activeAgentsRef.current);
           if (agentIdForToolCall) {
             dispatch({
               type: 'UPDATE_AGENT',
@@ -227,7 +231,7 @@ export function useTaskObservability() {
           );
 
           // Clear agent's current action
-          const agentIdForToolResult = findAgentByToolCall(state.activeAgents);
+          const agentIdForToolResult = findAgentByToolCall(activeAgentsRef.current);
           if (agentIdForToolResult) {
             dispatch({
               type: 'UPDATE_AGENT',
@@ -275,6 +279,12 @@ export function useTaskObservability() {
           break;
         }
 
+        case 'orchestrator.complete': {
+          dispatch({ type: 'SET_STATUS', status: 'completed' });
+          addActivity('status', 'All tasks completed');
+          break;
+        }
+
         // =====================================================================
         // Monitoring Events
         // =====================================================================
@@ -292,7 +302,7 @@ export function useTaskObservability() {
           console.log('[Observability] Unknown event type:', event.type);
       }
     },
-    [dispatch, addActivity, state.activeAgents]
+    [dispatch, addActivity]
   );
 
   /**

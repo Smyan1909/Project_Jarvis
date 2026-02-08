@@ -27,6 +27,11 @@ export function convertToolDefinitions(
   const toolSet: Record<string, CoreTool> = {};
 
   for (const t of tools) {
+    // Debug logging for problematic tool
+    if (t.name.includes('COMPOSIO_MULTI_EXECUTE_TOOL')) {
+      console.log('[Tools] COMPOSIO_MULTI_EXECUTE_TOOL input schema:', JSON.stringify(t.parameters, null, 2));
+    }
+    
     toolSet[t.name] = tool({
       description: t.description,
       parameters: convertParametersToZod(t.parameters),
@@ -118,23 +123,24 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
           shape[key] = convertParameterToZod(nestedParam);
         }
 
-        // If additionalProperties is true, use passthrough() to allow extra fields
-        // Otherwise use strict() to set additionalProperties: false (required by OpenAI)
-        if (param.additionalProperties === true) {
-          schema = z.object(shape).passthrough();
-        } else {
-          schema = z.object(shape).strict();
-        }
+        // OpenAI strict mode does NOT support additionalProperties: true
+        // If the source schema has additionalProperties: true but also has defined properties,
+        // we ignore the additionalProperties and use strict() to satisfy OpenAI
+        schema = z.object(shape).strict();
       } else if (param.additionalProperties === true) {
-        // For objects with no defined properties but additionalProperties: true
-        // Use z.object({}).passthrough() to allow any key-value pairs (dynamic object)
-        // Note: z.record() generates "additionalProperties": {} which OpenAI rejects
-        // z.object({}).passthrough() generates "additionalProperties": true which works
-        schema = z.object({}).passthrough();
+        // For objects with no defined properties but additionalProperties: true (dynamic objects)
+        // OpenAI does NOT support additionalProperties: true in strict mode
+        // Convert to a JSON string that the model will populate with a JSON object
+        // The caller will need to JSON.parse() this string
+        schema = z.string().describe(
+          (param.description ? param.description + ' ' : '') + 
+          '(Provide as a JSON string, e.g. {"key": "value"})'
+        );
       } else {
-        // For objects without defined properties or additionalProperties
-        // Use a string that will contain JSON (legacy fallback)
-        schema = z.string().describe('JSON string representing the object');
+        // For objects without defined properties and additionalProperties is false or undefined
+        // OpenAI requires additionalProperties: false, so use strict() on an empty object
+        // This generates { "type": "object", "properties": {}, "additionalProperties": false }
+        schema = z.object({}).strict();
       }
       break;
 

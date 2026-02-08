@@ -22,6 +22,21 @@ export const MessageMetadataSchema = z.object({
 
   /** Extracted intent of the message */
   intent: z.enum(['query', 'task_request', 'followup', 'clarification', 'feedback']).optional(),
+
+  /** Source of the message (e.g., 'monitoring_agent', 'user', 'system') */
+  source: z.string().optional(),
+
+  /** Monitoring agent event ID (when source is 'monitoring_agent') */
+  eventId: z.string().optional(),
+
+  /** Trigger type for monitoring agent messages */
+  triggerType: z.string().optional(),
+
+  /** Toolkit used for monitoring agent messages (e.g., 'GITHUB', 'SLACK') */
+  toolkit: z.string().optional(),
+
+  /** Associated orchestrator run ID */
+  orchestratorRunId: z.string().optional(),
 });
 
 export type MessageMetadata = z.infer<typeof MessageMetadataSchema>;

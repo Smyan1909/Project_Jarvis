@@ -241,7 +241,7 @@ export const orchestratorApi = {
    * Start an orchestrator run. Returns a Response object for SSE streaming.
    * Use with fetch streaming API, not axios.
    */
-  startRun: async (input: string, model?: string): Promise<Response> => {
+  startRun: async (input: string, model?: string, signal?: AbortSignal): Promise<Response> => {
     const token = await getAccessToken();
     return fetch(`${API_URL}/v1/orchestrator/run`, {
       method: 'POST',
@@ -250,6 +250,7 @@ export const orchestratorApi = {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ input, model }),
+      signal,
     });
   },
 

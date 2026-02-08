@@ -342,8 +342,11 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
 
     try {
       const orchestrator = createOrchestratorService((event) => {
-        // Events are already published via the adapter, but we can log here
         log.debug('Event emitted', { eventType: event.type });
+        // Publish event to SSE stream
+        eventStreamAdapter.publish(userId, runId, event).catch((err) => {
+          log.error('Failed to publish event', { error: err, eventType: event.type });
+        });
       });
 
       log.debug('Orchestrator service created, executing run');
@@ -514,23 +517,37 @@ orchestratorRoutes.get('/conversation/history', async (c) => {
   const userId = await getTestUserId();
   const limit = parseInt(c.req.query('limit') || '50', 10);
 
+  // Lazy initialize conversation history service if not already done
   if (!conversationHistoryService) {
-    return c.json({ error: 'Conversation history service not initialized' }, 500);
+    const tokenCounter = new TokenCounterService();
+    const summaryLLM = llmRouter.getProvider('fast');
+    conversationHistoryService = new ConversationHistoryService(
+      messageRepository,
+      conversationSummaryRepository,
+      tokenCounter,
+      summaryLLM
+    );
   }
 
-  const { messages, totalCount } = await conversationHistoryService.getHistory(userId, limit);
+  try {
+    const { messages, totalCount } = await conversationHistoryService.getHistory(userId, limit);
 
-  return c.json({
-    messages: messages.map(m => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      metadata: m.metadata,
-      createdAt: m.createdAt,
-    })),
-    totalCount,
-    hasMore: totalCount > messages.length,
-  });
+    return c.json({
+      messages: messages.map(m => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        metadata: m.metadata,
+        createdAt: m.createdAt,
+      })),
+      totalCount,
+      hasMore: totalCount > messages.length,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Failed to get conversation history', { error: errorMessage });
+    return c.json({ error: 'Failed to get conversation history', message: errorMessage }, 500);
+  }
 });
 
 /**

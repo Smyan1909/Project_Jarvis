@@ -27,6 +27,7 @@ import { TriggerSubscriptionRepository } from '../../../adapters/storage/trigger
 import { MonitoredEventRepository } from '../../../adapters/storage/monitored-event-repository.js';
 import { SlackPriorityContactRepository } from '../../../adapters/storage/slack-priority-contact-repository.js';
 import { PushTokenRepository } from '../../../adapters/storage/push-token-repository.js';
+import { MessageRepository } from '../../../adapters/storage/message-repository.js';
 
 // Create a mock socket server for testing
 const mockSocketServer = {
@@ -38,6 +39,7 @@ const triggerSubRepo = new TriggerSubscriptionRepository();
 const eventRepo = new MonitoredEventRepository();
 const priorityContactRepo = new SlackPriorityContactRepository();
 const pushTokenRepo = new PushTokenRepository();
+const messageRepo = new MessageRepository();
 const replyService = new TriggerReplyService();
 const pushService = new PushNotificationService(pushTokenRepo, { enabled: false });
 
@@ -45,6 +47,7 @@ const monitoringService = new MonitoringAgentService(
   triggerSubRepo,
   eventRepo,
   priorityContactRepo,
+  messageRepo,
   replyService,
   pushService,
   mockSocketServer,

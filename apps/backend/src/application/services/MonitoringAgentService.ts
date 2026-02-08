@@ -9,6 +9,7 @@ import { logger } from '../../infrastructure/logging/logger.js';
 import type { TriggerSubscriptionRepository, CreateTriggerSubscriptionData } from '../../adapters/storage/trigger-subscription-repository.js';
 import type { MonitoredEventRepository, CreateMonitoredEventData } from '../../adapters/storage/monitored-event-repository.js';
 import type { SlackPriorityContactRepository } from '../../adapters/storage/slack-priority-contact-repository.js';
+import type { MessageRepository } from '../../adapters/storage/message-repository.js';
 import type { TriggerReplyService, ReplyAction } from './TriggerReplyService.js';
 import type { PushNotificationService } from './PushNotificationService.js';
 import { MonitoringNotificationTemplates } from './PushNotificationService.js';
@@ -108,6 +109,7 @@ export class MonitoringAgentService {
     private triggerSubRepo: TriggerSubscriptionRepository,
     private eventRepo: MonitoredEventRepository,
     private priorityContactRepo: SlackPriorityContactRepository,
+    private messageRepo: MessageRepository,
     private replyService: TriggerReplyService,
     private pushService: PushNotificationService,
     private socketServer: SocketServer,
@@ -1068,14 +1070,56 @@ export class MonitoringAgentService {
     event: MonitoredEvent,
     orchestratorRunId: string | null
   ): Promise<void> {
-    // TODO: Implement conversation message insertion
-    // This would use the MessageRepository to insert a system message
-    // that appears in the user's conversation thread
-    
-    // For now, this is handled by the WebSocket event
-    this.log.debug('Conversation message insertion not yet implemented', {
-      userId,
-      eventId: event.id,
-    });
+    const log = this.log.child({ method: 'insertConversationMessage', userId, eventId: event.id });
+
+    try {
+      // Build a descriptive system message
+      const statusText = orchestratorRunId ? 'Auto-started' : 'Awaiting approval';
+      const metadata = TRIGGER_METADATA[event.triggerType];
+      
+      let messageContent = `[Monitoring Agent] ${metadata.name}: "${event.parsedContext.title}"\n`;
+      
+      if (event.toolkit === 'GITHUB') {
+        if (event.parsedContext.repository) {
+          messageContent += `Repository: ${event.parsedContext.repository}`;
+        }
+        if (event.parsedContext.issueNumber) {
+          messageContent += ` | Issue #${event.parsedContext.issueNumber}`;
+        }
+        if (event.parsedContext.prNumber) {
+          messageContent += ` | PR #${event.parsedContext.prNumber}`;
+        }
+        messageContent += '\n';
+      } else if (event.toolkit === 'SLACK') {
+        if (event.parsedContext.channelName) {
+          messageContent += `Channel: #${event.parsedContext.channelName}\n`;
+        }
+        messageContent += `From: ${event.parsedContext.senderDisplayName || event.parsedContext.sender}\n`;
+      }
+      
+      messageContent += `Status: ${statusText}`;
+      if (event.parsedContext.sourceUrl) {
+        messageContent += `\nURL: ${event.parsedContext.sourceUrl}`;
+      }
+
+      await this.messageRepo.create({
+        userId,
+        runId: null, // Standalone message in user's conversation history
+        role: 'system',
+        content: messageContent,
+        metadata: {
+          source: 'monitoring_agent',
+          eventId: event.id,
+          triggerType: event.triggerType,
+          toolkit: event.toolkit,
+          orchestratorRunId: orchestratorRunId || undefined,
+        },
+      });
+
+      log.info('Conversation message inserted', { eventId: event.id });
+    } catch (error) {
+      log.error('Failed to insert conversation message', error);
+      // Don't throw - this is not critical to the monitoring flow
+    }
   }
 }

@@ -136,25 +136,43 @@ export class ComposioIntegrationService {
       userIds: [userId],
     });
 
+    // Debug logging for connected accounts
+    console.log('[Composio] getSupportedApps for user', userId, '- accounts:', JSON.stringify(accounts, null, 2));
+
     // Build a map of toolkit slug -> connected account
+    // Only include ACTIVE accounts, normalize slug to uppercase for matching
     const connectedMap = new Map<string, string>();
     for (const account of accounts.items ?? []) {
       const slug = account.toolkit?.slug;
-      if (slug && !connectedMap.has(slug)) {
-        connectedMap.set(slug, account.id);
+      const normalizedSlug = slug?.toUpperCase();
+      console.log('[Composio] Account:', account.id, 'toolkit:', slug, 'normalized:', normalizedSlug, 'status:', account.status);
+      
+      // Only count ACTIVE accounts as connected
+      if (normalizedSlug && account.status === 'ACTIVE' && !connectedMap.has(normalizedSlug)) {
+        connectedMap.set(normalizedSlug, account.id);
       }
     }
+    
+    console.log('[Composio] Connected map:', Array.from(connectedMap.entries()));
 
     // Map supported toolkits to status
     const apps: AppWithStatus[] = Object.entries(SUPPORTED_TOOLKITS).map(
-      ([key, toolkit]) => ({
-        key,
-        slug: toolkit.slug,
-        name: toolkit.name,
-        description: toolkit.description,
-        isConnected: connectedMap.has(toolkit.slug),
-        connectedAccountId: connectedMap.get(toolkit.slug),
-      })
+      ([key, toolkit]) => {
+        const normalizedSlug = toolkit.slug.toUpperCase();
+        const isConnected = connectedMap.has(normalizedSlug);
+        const connectedAccountId = connectedMap.get(normalizedSlug);
+        
+        console.log('[Composio] App:', key, 'slug:', toolkit.slug, 'normalized:', normalizedSlug, 'isConnected:', isConnected);
+        
+        return {
+          key,
+          slug: toolkit.slug,
+          name: toolkit.name,
+          description: toolkit.description,
+          isConnected,
+          connectedAccountId,
+        };
+      }
     );
 
     return apps;
@@ -186,6 +204,9 @@ export class ComposioIntegrationService {
     // Cast to access properties that may exist
     const requestAny = connectionRequest as unknown as Record<string, unknown>;
 
+    // Debug logging for OAuth flow
+    console.log('[Composio] initiateConnection response:', JSON.stringify(connectionRequest, null, 2));
+
     return {
       connectionId: (requestAny.connectedAccountId as string) ?? (requestAny.id as string) ?? '',
       redirectUrl: connectionRequest.redirectUrl ?? '',
@@ -199,6 +220,9 @@ export class ComposioIntegrationService {
   async getConnectionStatus(connectionId: string): Promise<ConnectionStatus> {
     try {
       const account = await this.client.connectedAccounts.get(connectionId);
+
+      // Debug logging for OAuth polling
+      console.log('[Composio] getConnectionStatus for', connectionId, '- account:', JSON.stringify(account, null, 2));
 
       // Map Composio status to our status
       let status: ConnectionStatus['status'] = 'initiated';

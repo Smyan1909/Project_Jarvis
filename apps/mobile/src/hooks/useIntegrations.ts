@@ -4,7 +4,15 @@
 // Manages OAuth integrations with polling for connection status.
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
+
+// Declare window for web platform
+declare const window: {
+  innerWidth: number;
+  innerHeight: number;
+  open: (url: string, target: string, features: string) => void;
+} | undefined;
 import { composioApi, AppWithStatus, ConnectionStatus } from '../services/api';
 
 // =============================================================================
@@ -30,6 +38,7 @@ interface UseIntegrationsReturn extends UseIntegrationsState {
   initiateConnection: (appKey: string) => Promise<void>;
   disconnectApp: (accountId: string, appKey: string) => Promise<void>;
   cancelPendingConnection: () => void;
+  confirmManualAuthorization: () => Promise<void>;
 }
 
 // =============================================================================
@@ -67,12 +76,19 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
   const fetchApps = useCallback(async () => {
     try {
       const { apps } = await composioApi.getApps(userId);
+      console.log('[Integrations] Fetched apps:', apps);
+      
+      // Log connected apps specifically
+      const connected = apps.filter(a => a.isConnected);
+      console.log('[Integrations] Connected apps:', connected);
+      
       setState((prev) => ({
         ...prev,
         apps,
         error: null,
       }));
     } catch (error: any) {
+      console.error('[Integrations] Failed to fetch apps:', error);
       setState((prev) => ({
         ...prev,
         error: error.message || 'Failed to fetch integrations',
@@ -125,8 +141,12 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
       try {
         const status: ConnectionStatus = await composioApi.getConnectionStatus(connectionId);
 
+        // Debug logging for OAuth polling
+        console.log('[OAuth] Poll response for', connectionId, ':', status);
+
         if (status.status === 'active') {
           // Connection successful
+          console.log('[OAuth] Connection successful! Stopping polling and refreshing apps...');
           stopPolling();
           setState((prev) => ({
             ...prev,
@@ -135,6 +155,7 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
           }));
           // Refresh apps to get updated status
           await fetchApps();
+          console.log('[OAuth] Apps refreshed after successful connection');
         } else if (status.status === 'failed' || status.status === 'expired') {
           // Connection failed
           stopPolling();
@@ -183,8 +204,21 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
           pendingAppKey: appKey,
         }));
 
-        // Open OAuth URL in browser
-        await Linking.openURL(connectionInfo.redirectUrl);
+        // Open OAuth URL - use popup on web for better UX
+        if (Platform.OS === 'web' && window) {
+          // Open in a popup window
+          const popupWidth = 600;
+          const popupHeight = 700;
+          const left = (window.innerWidth - popupWidth) / 2;
+          const top = (window.innerHeight - popupHeight) / 2;
+          window.open(
+            connectionInfo.redirectUrl,
+            'oauth_popup',
+            `width=${popupWidth},height=${popupHeight},left=${left},top=${top},popup=1`
+          );
+        } else {
+          await Linking.openURL(connectionInfo.redirectUrl);
+        }
 
         // Start polling for status
         startPolling(connectionInfo.connectionId, appKey);
@@ -227,6 +261,14 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
     }));
   }, [stopPolling]);
 
+  // Manually confirm authorization (for when redirect doesn't work)
+  const confirmManualAuthorization = useCallback(async () => {
+    if (state.pendingConnectionId && state.pendingAppKey) {
+      // Poll immediately to check if authorization completed
+      await pollConnectionStatus(state.pendingConnectionId, state.pendingAppKey);
+    }
+  }, [state.pendingConnectionId, state.pendingAppKey, pollConnectionStatus]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -257,5 +299,6 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
     initiateConnection,
     disconnectApp,
     cancelPendingConnection,
+    confirmManualAuthorization,
   };
 }
