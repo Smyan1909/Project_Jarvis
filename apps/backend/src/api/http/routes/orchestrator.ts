@@ -251,7 +251,7 @@ initializeToolRegistry().catch((error) => {
 // Service Factory
 // =============================================================================
 
-function createOrchestratorService(onEvent: (event: StreamEvent) => void): OrchestratorService {
+export function createOrchestratorService(onEvent: (event: StreamEvent) => void): OrchestratorService {
   const llm = llmRouter.getPowerfulProvider();
   
   // Create context management service for automatic summarization

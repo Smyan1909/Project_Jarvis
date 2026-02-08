@@ -35,6 +35,10 @@ const envSchema = z.object({
     OTEL_SERVICE_NAME: z.string().default('project-jarvis-backend'),
     OTEL_SERVICE_VERSION: z.string().default('1.0.0'),
     OTEL_DEBUG: z.enum(['true', 'false']).default('false'),
+
+    // Monitoring Agent (Composio integration)
+    COMPOSIO_WEBHOOK_URL: z.string().url().optional(),
+    COMPOSIO_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

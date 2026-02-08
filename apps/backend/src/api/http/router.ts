@@ -85,6 +85,25 @@ app.route('/api/v1/usage', usageRoutes);
 app.route('/api/v1/chat', chatRoutes);
 app.route('/api/v1/orchestrator', orchestratorRoutes);
 
+// =============================================================================
+// Monitoring & Webhook Routes
+// =============================================================================
+// NOTE: Monitoring and webhook routes require dependency injection.
+// They should be mounted in the server initialization code where services
+// are instantiated. Example:
+//
+//   import { createWebhookRoutes } from './routes/webhooks.js';
+//   import { createMonitoringRoutes } from './routes/monitoring.js';
+//
+//   const webhookRoutes = createWebhookRoutes({ monitoringService });
+//   const monitoringRoutes = createMonitoringRoutes({ monitoringService, pushService });
+//
+//   app.route('/api/v1/webhooks', webhookRoutes);
+//   app.route('/api/v1/monitoring', monitoringRoutes);
+//
+// See apps/backend/src/index.ts for the full initialization.
+// =============================================================================
+
 // MCP tools debug routes - simple direct implementation
 app.get('/api/v1/mcp/tools', async (c) => {
   const mcpClientManager = getMCPClientManager();

@@ -248,6 +248,36 @@ export class AuthService {
     return user ? this.toSafeUser(user) : null;
   }
 
+  /**
+   * Reset user password
+   * Invalidates all existing refresh tokens for security
+   * @throws NotFoundError if user not found
+   * @throws ValidationError if password doesn't meet requirements
+   */
+  async resetPassword(userId: string, newPassword: string): Promise<void> {
+    // Validate new password
+    this.validatePassword(newPassword);
+
+    // Verify user exists
+    const user = await this.userRepo.findById(userId);
+    if (!user) {
+      throw new NotFoundError('User');
+    }
+
+    // Hash new password
+    const passwordHash = await hash(newPassword, BCRYPT_ROUNDS);
+
+    // Update password in database
+    await this.userRepo.update(userId, { passwordHash });
+
+    // CRITICAL FIX: Invalidate all refresh tokens for security
+    // This prevents the bug where users can't log in after password reset
+    // because old tokens cause conflicts
+    await this.refreshTokenRepo.deleteAllForUser(userId);
+
+    logger.info('Password reset successful', { userId, email: user.email });
+  }
+
   // ===========================================================================
   // Private Methods
   // ===========================================================================

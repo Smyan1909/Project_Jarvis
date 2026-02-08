@@ -355,6 +355,67 @@ export const OrchestratorEventSchema = z.discriminatedUnion('type', [
 export type OrchestratorEvent = z.infer<typeof OrchestratorEventSchema>;
 
 // =============================================================================
+// MONITORING AGENT EVENTS
+// =============================================================================
+
+// =============================================================================
+// Monitoring Event Received
+// =============================================================================
+
+export const MonitoringEventReceivedSchema = z.object({
+  type: z.literal('monitoring.event_received'),
+  eventId: z.string().uuid(),
+  triggerType: z.string(),
+  toolkit: z.enum(['GITHUB', 'SLACK']),
+  title: z.string(),
+  summary: z.string(),
+  requiresApproval: z.boolean(),
+  autoStarted: z.boolean(),
+  sourceUrl: z.string().url().nullable(),
+  orchestratorRunId: z.string().uuid().nullable(),
+});
+
+export type MonitoringEventReceived = z.infer<typeof MonitoringEventReceivedSchema>;
+
+// =============================================================================
+// Monitoring Event Status Change
+// =============================================================================
+
+export const MonitoringEventStatusChangeSchema = z.object({
+  type: z.literal('monitoring.event_status'),
+  eventId: z.string().uuid(),
+  status: z.enum(['approved', 'rejected', 'in_progress', 'completed', 'failed']),
+  orchestratorRunId: z.string().uuid().nullable(),
+});
+
+export type MonitoringEventStatusChange = z.infer<typeof MonitoringEventStatusChangeSchema>;
+
+// =============================================================================
+// Monitoring Source Reply
+// =============================================================================
+
+export const MonitoringSourceReplySchema = z.object({
+  type: z.literal('monitoring.source_reply'),
+  eventId: z.string().uuid(),
+  platform: z.enum(['github', 'slack']),
+  replyContent: z.string(),
+});
+
+export type MonitoringSourceReply = z.infer<typeof MonitoringSourceReplySchema>;
+
+// =============================================================================
+// Monitoring Event (Discriminated Union)
+// =============================================================================
+
+export const MonitoringEventSchema = z.discriminatedUnion('type', [
+  MonitoringEventReceivedSchema,
+  MonitoringEventStatusChangeSchema,
+  MonitoringSourceReplySchema,
+]);
+
+export type MonitoringEvent = z.infer<typeof MonitoringEventSchema>;
+
+// =============================================================================
 // Combined Event (All events that can be streamed to client)
 // =============================================================================
 
@@ -383,6 +444,10 @@ export const StreamEventSchema = z.discriminatedUnion('type', [
   MCPServerErrorEventSchema,
   MCPToolDiscoveredEventSchema,
   MCPConnectionStateChangeEventSchema,
+  // Monitoring agent events
+  MonitoringEventReceivedSchema,
+  MonitoringEventStatusChangeSchema,
+  MonitoringSourceReplySchema,
 ]);
 
 export type StreamEvent = z.infer<typeof StreamEventSchema>;
