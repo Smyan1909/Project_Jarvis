@@ -28,6 +28,7 @@ import { TriggerSubscriptionRepository } from './adapters/storage/trigger-subscr
 import { MonitoredEventRepository } from './adapters/storage/monitored-event-repository.js';
 import { SlackPriorityContactRepository } from './adapters/storage/slack-priority-contact-repository.js';
 import { PushTokenRepository } from './adapters/storage/push-token-repository.js';
+import { MessageRepository } from './adapters/storage/message-repository.js';
 
 // Composio integration for GitHub/Slack replies
 import {
@@ -78,6 +79,7 @@ const triggerSubRepo = new TriggerSubscriptionRepository();
 const eventRepo = new MonitoredEventRepository();
 const priorityContactRepo = new SlackPriorityContactRepository();
 const pushTokenRepo = new PushTokenRepository();
+const messageRepo = new MessageRepository();
 
 // Initialize services
 const replyService = new TriggerReplyService();
@@ -106,6 +108,7 @@ const monitoringService = new MonitoringAgentService(
   triggerSubRepo,
   eventRepo,
   priorityContactRepo,
+  messageRepo,
   replyService,
   pushService,
   socketServer,
@@ -122,7 +125,9 @@ app.route('/api/v1/monitoring', monitoringRoutes);
 
 // Mount Composio routes for OAuth integrations (if service is available)
 if (composioService) {
-  const composioRoutes = createComposioRoutes({ composioService });
+  // Cast to any since createComposioRoutes expects the full ComposioIntegrationService
+  // but we have the interface type. At runtime this is the same object.
+  const composioRoutes = createComposioRoutes({ composioService: composioService as any });
   app.route('/api/v1/composio', composioRoutes);
   logger.info('Composio routes mounted at /api/v1/composio');
 }

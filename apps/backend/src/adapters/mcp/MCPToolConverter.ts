@@ -177,12 +177,17 @@ function convertSchemaProperty(schema: Record<string, unknown>): ToolParameter {
         for (const [key, value] of Object.entries(properties)) {
           convertedProps[key] = convertSchemaProperty(value as Record<string, unknown>);
         }
+        
+        // OpenAI requires additionalProperties: false for all object schemas
+        // Only set to true if explicitly specified in the source schema
+        const additionalPropsValue = additionalProperties === true ? true : false;
+        
         return {
           type: 'object',
           description,
           properties: convertedProps,
           required,
-          additionalProperties: additionalProperties === true ? true : undefined,
+          additionalProperties: additionalPropsValue,
         };
       }
 
@@ -195,9 +200,11 @@ function convertSchemaProperty(schema: Record<string, unknown>): ToolParameter {
         };
       }
 
+      // For objects without defined properties, default to additionalProperties: false
       return {
         type: 'object',
         description,
+        additionalProperties: false,
       };
     }
 

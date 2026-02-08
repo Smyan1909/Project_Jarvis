@@ -96,6 +96,7 @@ export function IntegrationsScreen() {
     initiateConnection,
     disconnectApp,
     cancelPendingConnection,
+    confirmManualAuthorization,
   } = useIntegrations({ userId });
 
   // Use demo data in demo mode
@@ -180,9 +181,14 @@ export function IntegrationsScreen() {
       {pendingAppKey && (
         <View style={styles.pendingBanner}>
           <ActivityIndicator size="small" color={colors.primary} />
-          <Text style={styles.pendingText}>
-            Waiting for {pendingAppKey} authorization...
-          </Text>
+          <View style={styles.pendingTextContainer}>
+            <Text style={styles.pendingText}>
+              Waiting for {pendingAppKey} authorization...
+            </Text>
+            <TouchableOpacity onPress={confirmManualAuthorization}>
+              <Text style={styles.confirmLink}>I've completed authorization</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity onPress={cancelPendingConnection}>
             <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -346,10 +352,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  pendingText: {
+  pendingTextContainer: {
     flex: 1,
+  },
+  pendingText: {
     fontSize: 13,
     color: colors.text,
+  },
+  confirmLink: {
+    fontSize: 12,
+    color: colors.primary,
+    marginTop: 4,
+    textDecorationLine: 'underline',
   },
   loadingContainer: {
     flex: 1,

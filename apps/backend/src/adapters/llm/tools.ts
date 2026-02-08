@@ -107,36 +107,43 @@ function convertParameterToZod(param: ToolParameter): z.ZodTypeAny {
       }
       break;
 
-    case 'object':
+    case 'object': {
+      const hasProps = param.properties && Object.keys(param.properties).length > 0;
+      const hasAdditionalProps = param.additionalProperties === true;
+      
       // Handle nested objects with defined properties
-      if (param.properties && Object.keys(param.properties).length > 0) {
+      if (hasProps) {
         const shape: z.ZodRawShape = {};
         
         // OpenAI strict mode requires ALL properties to be required
         // So we make all fields required in the Zod schema
-        for (const [key, nestedParam] of Object.entries(param.properties)) {
+        for (const [key, nestedParam] of Object.entries(param.properties!)) {
           shape[key] = convertParameterToZod(nestedParam);
         }
 
-        // If additionalProperties is true, use passthrough() to allow extra fields
-        // Otherwise use strict() to set additionalProperties: false (required by OpenAI)
-        if (param.additionalProperties === true) {
-          schema = z.object(shape).passthrough();
-        } else {
-          schema = z.object(shape).strict();
-        }
-      } else if (param.additionalProperties === true) {
-        // For objects with no defined properties but additionalProperties: true
-        // Use z.object({}).passthrough() to allow any key-value pairs (dynamic object)
-        // Note: z.record() generates "additionalProperties": {} which OpenAI rejects
-        // z.object({}).passthrough() generates "additionalProperties": true which works
-        schema = z.object({}).passthrough();
+        // OpenAI strict mode does NOT support additionalProperties: true
+        // If the source schema has additionalProperties: true but also has defined properties,
+        // we ignore the additionalProperties and use strict() to satisfy OpenAI
+        schema = z.object(shape).strict();
+      } else if (hasAdditionalProps) {
+        // For objects with no defined properties but additionalProperties: true (dynamic objects)
+        // OpenAI does NOT support additionalProperties: true in strict mode
+        // Convert to a JSON string that the model will populate with a JSON object
+        // The caller will need to JSON.parse() this string
+        const jsonInstruction = '(Provide as a JSON string, e.g. {"key": "value"})';
+        schema = z.string().describe(
+          (param.description ? param.description + ' ' : '') + jsonInstruction
+        );
+        // Return early to avoid overwriting the description with just param.description
+        return schema;
       } else {
-        // For objects without defined properties or additionalProperties
-        // Use a string that will contain JSON (legacy fallback)
-        schema = z.string().describe('JSON string representing the object');
+        // For objects without defined properties and additionalProperties is false or undefined
+        // OpenAI requires additionalProperties: false, so use strict() on an empty object
+        // This generates { "type": "object", "properties": {}, "additionalProperties": false }
+        schema = z.object({}).strict();
       }
       break;
+    }
 
     default:
       schema = z.string(); // Default to string instead of unknown

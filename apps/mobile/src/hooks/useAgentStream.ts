@@ -3,11 +3,11 @@
 // =============================================================================
 // Hook for sending messages and receiving streaming responses from orchestrator.
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { orchestratorApi } from '../services/api';
 import { getMockResponse } from '../services/mockAgent';
 import { useTaskObservability } from './useTaskObservability';
-import { DEMO_MODE } from '../config';
+import { DEMO_MODE, LOAD_HISTORY_ON_STARTUP } from '../config';
 import type { StreamEvent } from '../services/websocket';
 
 // =============================================================================
@@ -107,6 +107,27 @@ export function useAgentStream(): UseAgentStreamResult {
 
   const { processEvent, startRun, clearRun, status: orchestratorStatus } = useTaskObservability();
 
+  // Load conversation history on mount (if enabled)
+  useEffect(() => {
+    if (DEMO_MODE) return;
+    if (!LOAD_HISTORY_ON_STARTUP) return;
+    
+    orchestratorApi.getHistory(50)
+      .then((data) => {
+        const historicalMessages: Message[] = data.messages
+          .filter((m) => m.role !== 'system') // Filter out system messages
+          .map((m) => ({
+            id: m.id,
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          }));
+        setMessages(historicalMessages);
+      })
+      .catch((err) => {
+        console.error('[AgentStream] Failed to load history:', err);
+      });
+  }, []);
+
   // Handle incoming stream events for chat display
   const handleChatEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
@@ -182,7 +203,11 @@ export function useAgentStream(): UseAgentStreamResult {
           if (lastMessage?.isStreaming) {
             return [
               ...prev.slice(0, -1),
-              { ...lastMessage, content: eventData.content, isStreaming: false },
+              { 
+                ...lastMessage, 
+                content: eventData.content || streamingContentRef.current || 'Response completed.',
+                isStreaming: false,
+              },
             ];
           }
           return prev;
@@ -281,7 +306,7 @@ export function useAgentStream(): UseAgentStreamResult {
       abortControllerRef.current = new AbortController();
 
       try {
-        const response = await orchestratorApi.startRun(content);
+        const response = await orchestratorApi.startRun(content, undefined, abortControllerRef.current?.signal);
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
@@ -315,6 +340,9 @@ export function useAgentStream(): UseAgentStreamResult {
           buffer = remaining;
 
           for (const event of events) {
+            // Debug logging for SSE events
+            console.log('[SSE] Received event:', event.type, event);
+
             // Process for observability panel
             processEvent(event);
 

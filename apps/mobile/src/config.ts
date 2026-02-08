@@ -12,6 +12,11 @@ export const WS_URL = process.env.EXPO_PUBLIC_WS_URL || SOCKET_URL;
 // When enabled, the app bypasses authentication and uses mock AI responses
 export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO_MODE !== 'false';
 
+// Chat History Configuration
+// Set EXPO_PUBLIC_LOAD_HISTORY_ON_STARTUP=true to load previous chat history on app start
+// Default: false (starts with fresh chat on each app restart)
+export const LOAD_HISTORY_ON_STARTUP = process.env.EXPO_PUBLIC_LOAD_HISTORY_ON_STARTUP === 'true';
+
 // Speech Configuration
 // Toggle between 'native' (device-native, free) and 'elevenlabs' (cloud, high-quality)
 export type SpeechProvider = 'native' | 'elevenlabs';

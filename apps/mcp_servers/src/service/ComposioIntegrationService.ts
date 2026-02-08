@@ -137,24 +137,34 @@ export class ComposioIntegrationService {
     });
 
     // Build a map of toolkit slug -> connected account
+    // Only include ACTIVE accounts, normalize slug to uppercase for matching
     const connectedMap = new Map<string, string>();
     for (const account of accounts.items ?? []) {
       const slug = account.toolkit?.slug;
-      if (slug && !connectedMap.has(slug)) {
-        connectedMap.set(slug, account.id);
+      const normalizedSlug = slug?.toUpperCase();
+      
+      // Only count ACTIVE accounts as connected
+      if (normalizedSlug && account.status === 'ACTIVE' && !connectedMap.has(normalizedSlug)) {
+        connectedMap.set(normalizedSlug, account.id);
       }
     }
 
     // Map supported toolkits to status
     const apps: AppWithStatus[] = Object.entries(SUPPORTED_TOOLKITS).map(
-      ([key, toolkit]) => ({
-        key,
-        slug: toolkit.slug,
-        name: toolkit.name,
-        description: toolkit.description,
-        isConnected: connectedMap.has(toolkit.slug),
-        connectedAccountId: connectedMap.get(toolkit.slug),
-      })
+      ([key, toolkit]) => {
+        const normalizedSlug = toolkit.slug.toUpperCase();
+        const isConnected = connectedMap.has(normalizedSlug);
+        const connectedAccountId = connectedMap.get(normalizedSlug);
+        
+        return {
+          key,
+          slug: toolkit.slug,
+          name: toolkit.name,
+          description: toolkit.description,
+          isConnected,
+          connectedAccountId,
+        };
+      }
     );
 
     return apps;

@@ -3,7 +3,7 @@
 // =============================================================================
 // Main chat interface with Jarvis AI assistant.
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,10 +19,12 @@ import {
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useAgentStream } from '../hooks/useAgentStream';
 import { useTextToSpeech } from '../hooks/useTextToSpeech';
+import { useChatQueue } from '../hooks/useChatQueue';
 import { useTaskObservabilityContext } from '../features/observability/TaskObservabilityContext';
 import { SpeechPanel, SpeechPanelRef } from '../components/SpeechPanel';
 import { TaskObservabilityPanel } from '../components/TaskObservabilityPanel';
@@ -55,6 +57,18 @@ export function ChatScreen() {
   const { messages, isLoading, error, sendMessage } = useAgentStream();
   const { isSpeaking, speak, stop: stopSpeaking, error: ttsError } = useTextToSpeech();
   const { state: observabilityState } = useTaskObservabilityContext();
+
+  // Chat queue for handling multiple messages
+  const { queue, pendingCount, isProcessing, enqueue } = useChatQueue({
+    processMessage: async (content: string) => {
+      await sendMessage(content, (responseText, messageId) => {
+        if (ttsEnabled) {
+          setCurrentlyPlayingId(messageId);
+          speak(responseText);
+        }
+      });
+    },
+  });
 
   const flatListRef = useRef<FlatList>(null);
   const speechPanelRef = useRef<SpeechPanelRef>(null);
@@ -108,10 +122,10 @@ export function ChatScreen() {
     })
     .activeOffsetX([-20, 20]);
 
-  // Send message and trigger TTS immediately when response arrives
-  const handleSend = async () => {
+  // Send message via queue - allows sending while previous messages are processing
+  const handleSend = () => {
     const trimmedInput = input.trim();
-    if (!trimmedInput || isLoading) return;
+    if (!trimmedInput) return;
 
     // Stop any ongoing TTS before sending new message
     if (isSpeaking) {
@@ -121,13 +135,8 @@ export function ChatScreen() {
 
     setInput('');
 
-    // Pass TTS callback - will be called immediately when response is ready
-    await sendMessage(trimmedInput, (responseText, messageId) => {
-      if (ttsEnabled) {
-        setCurrentlyPlayingId(messageId);
-        speak(responseText);
-      }
-    });
+    // Add to queue - will be processed sequentially
+    enqueue(trimmedInput);
   };
 
   const toggleTts = useCallback(() => {
@@ -166,6 +175,94 @@ export function ChatScreen() {
     [currentlyPlayingId, isSpeaking, stopSpeaking, speak]
   );
 
+  // Markdown styles for assistant messages
+  const markdownStyles = useMemo(() => ({
+    body: {
+      color: colors.assistantBubbleText,
+      fontSize: 15,
+      lineHeight: 22,
+    },
+    paragraph: {
+      marginTop: 0,
+      marginBottom: 8,
+    },
+    heading1: {
+      fontSize: 20,
+      fontWeight: '700' as const,
+      color: colors.text,
+      marginBottom: 8,
+      marginTop: 12,
+    },
+    heading2: {
+      fontSize: 18,
+      fontWeight: '600' as const,
+      color: colors.text,
+      marginBottom: 6,
+      marginTop: 10,
+    },
+    heading3: {
+      fontSize: 16,
+      fontWeight: '600' as const,
+      color: colors.text,
+      marginBottom: 4,
+      marginTop: 8,
+    },
+    code_inline: {
+      backgroundColor: colors.backgroundTertiary,
+      color: colors.primary,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+      borderRadius: 4,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13,
+    },
+    code_block: {
+      backgroundColor: colors.backgroundTertiary,
+      padding: 12,
+      borderRadius: 8,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13,
+      color: colors.text,
+      marginVertical: 8,
+    },
+    fence: {
+      backgroundColor: colors.backgroundTertiary,
+      padding: 12,
+      borderRadius: 8,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 13,
+      color: colors.text,
+      marginVertical: 8,
+    },
+    blockquote: {
+      backgroundColor: colors.backgroundSecondary,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.primary,
+      paddingLeft: 12,
+      paddingVertical: 4,
+      marginVertical: 8,
+    },
+    bullet_list: {
+      marginVertical: 4,
+    },
+    ordered_list: {
+      marginVertical: 4,
+    },
+    list_item: {
+      marginVertical: 2,
+    },
+    link: {
+      color: colors.primary,
+      textDecorationLine: 'underline' as const,
+    },
+    strong: {
+      fontWeight: '600' as const,
+    },
+    em: {
+      fontStyle: 'italic' as const,
+    },
+  }), []);
+
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     const isStreaming = item.isStreaming && !item.content;
@@ -188,16 +285,19 @@ export function ChatScreen() {
           {isStreaming ? (
             <View style={styles.typingIndicator}>
               <ActivityIndicator size="small" color={colors.textTertiary} />
-              <Text style={styles.typingText}>Jarvis is thinking...</Text>
+              <Text style={styles.typingText}>Processing...</Text>
             </View>
-          ) : (
-            <Text
-              style={[
-                styles.messageText,
-                isUser ? styles.userMessageText : styles.assistantMessageText,
-              ]}
-            >
+          ) : isUser ? (
+            <Text style={[styles.messageText, styles.userMessageText]}>
               {item.content}
+            </Text>
+          ) : item.content ? (
+            <Markdown style={markdownStyles}>
+              {item.content}
+            </Markdown>
+          ) : (
+            <Text style={[styles.messageText, styles.assistantMessageText]}>
+              ...
             </Text>
           )}
         </View>
@@ -321,6 +421,20 @@ export function ChatScreen() {
             showsVerticalScrollIndicator={false}
           />
 
+          {/* Queue Status Indicator */}
+          {pendingCount > 0 && (
+            <View style={styles.queueIndicator}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.queueText}>
+                {isProcessing
+                  ? pendingCount > 1
+                    ? `Processing... (${pendingCount - 1} queued)`
+                    : 'Processing...'
+                  : `${pendingCount} message${pendingCount > 1 ? 's' : ''} queued`}
+              </Text>
+            </View>
+          )}
+
           {/* Input Area */}
           <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 8 }]}>
             {/* Mic Button */}
@@ -336,11 +450,10 @@ export function ChatScreen() {
               style={styles.input}
               value={input}
               onChangeText={setInput}
-              placeholder="Message Jarvis..."
+              placeholder={pendingCount > 0 ? "Queue another message..." : "Message Jarvis..."}
               placeholderTextColor={colors.textTertiary}
               multiline
               maxLength={4000}
-              editable={!isLoading}
               onSubmitEditing={handleSend}
               blurOnSubmit={false}
             />
@@ -348,17 +461,13 @@ export function ChatScreen() {
             <TouchableOpacity
               style={[
                 styles.sendButton,
-                (!input.trim() || isLoading) && styles.sendButtonDisabled,
+                !input.trim() && styles.sendButtonDisabled,
               ]}
               onPress={handleSend}
-              disabled={!input.trim() || isLoading}
+              disabled={!input.trim()}
               activeOpacity={0.8}
             >
-              {isLoading ? (
-                <ActivityIndicator size="small" color={colors.textInverse} />
-              ) : (
-                <Ionicons name="send" size={18} color={colors.textInverse} />
-              )}
+              <Ionicons name="send" size={18} color={colors.textInverse} />
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -563,6 +672,21 @@ const styles = StyleSheet.create({
   },
   assistantMessageText: {
     color: colors.assistantBubbleText,
+  },
+  queueIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: colors.backgroundSecondary,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 8,
+  },
+  queueText: {
+    fontSize: 13,
+    color: colors.textSecondary,
   },
   typingIndicator: {
     flexDirection: 'row',
