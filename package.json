@@ -16,6 +16,8 @@
     "typecheck": "pnpm -r typecheck"
   },
   "dependencies": {
-    "expo": "^54.0.0"
+    "expo": "^54.0.0",
+    "react-dom": "19.1.0",
+    "react-native-web": "^0.21.0"
   }
 }

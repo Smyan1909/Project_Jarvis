@@ -28,6 +28,7 @@ import { PushTokenRepository } from './adapters/storage/push-token-repository.js
 import {
   getComposioClient,
   createComposioIntegrationService,
+  createComposioRoutes,
   getEnvConfig as getComposioEnvConfig,
 } from '@project-jarvis/mcp-servers';
 import { logger } from './infrastructure/logging/logger.js';
@@ -113,6 +114,13 @@ const webhookRoutes = createWebhookRoutes({ monitoringService });
 const monitoringRoutes = createMonitoringRoutes({ monitoringService, pushService });
 app.route('/api/v1/webhooks', webhookRoutes);
 app.route('/api/v1/monitoring', monitoringRoutes);
+
+// Mount Composio routes for OAuth integrations (if service is available)
+if (composioService) {
+  const composioRoutes = createComposioRoutes({ composioService });
+  app.route('/api/v1/composio', composioRoutes);
+  logger.info('Composio routes mounted at /api/v1/composio');
+}
 
 // Schedule cleanup jobs
 scheduleEventCleanup();
