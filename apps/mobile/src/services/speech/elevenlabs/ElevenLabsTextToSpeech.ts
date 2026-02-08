@@ -39,6 +39,7 @@ function blobToDataUri(blob: Blob): Promise<string> {
 export class ElevenLabsTextToSpeech implements ITextToSpeechService {
   private sound: Audio.Sound | null = null;
   private speaking: boolean = false;
+  private requestId: number = 0; // Used to cancel pending requests
   private onStartCallback: TTSEventCallback | null = null;
   private onDoneCallback: TTSEventCallback | null = null;
   private onErrorCallback: TTSErrorCallback | null = null;
@@ -113,8 +114,11 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
       return;
     }
 
-    // Stop any ongoing speech
-    this.stop();
+    // Stop any ongoing speech and wait for it to fully stop
+    await this.stopAsync();
+    
+    // Capture current request ID (stopAsync already incremented it)
+    const currentRequestId = this.requestId;
 
     const config = SPEECH_CONFIG.elevenLabs;
     const voiceId = options?.voiceId || config.defaultVoiceId;
@@ -126,6 +130,12 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
 
     // Determine if we should use direct ElevenLabs API
     const useDirect = await this.shouldUseDirect();
+    
+    // Check if this request was cancelled while we were checking
+    if (currentRequestId !== this.requestId) {
+      console.log('[ElevenLabsTTS] Request cancelled (stale)');
+      return;
+    }
 
     // Check API key availability for direct mode
     if (useDirect && !config.apiKey) {
@@ -137,7 +147,7 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
       this.speaking = true;
       this.onStartCallback?.();
 
-      console.log('[ElevenLabsTTS] Starting TTS request...', { useDirect, voiceId, textLength: text.length });
+      console.log('[ElevenLabsTTS] Starting TTS request...', { useDirect, voiceId, textLength: text.length, requestId: currentRequestId });
 
       let audioBlob: Blob;
 
@@ -180,6 +190,13 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
 
         audioBlob = await response.blob();
         console.log('[ElevenLabsTTS] Received audio blob, size:', audioBlob.size);
+        
+        // Check if this request was cancelled
+        if (currentRequestId !== this.requestId) {
+          console.log('[ElevenLabsTTS] Request cancelled after fetch (stale)');
+          this.speaking = false;
+          return;
+        }
       } else {
         // Request audio from backend proxy (which calls ElevenLabs API)
         console.log('[ElevenLabsTTS] Calling backend proxy:', `${config.apiEndpoint}/tts`);
@@ -205,6 +222,13 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
 
         audioBlob = await response.blob();
         console.log('[ElevenLabsTTS] Received audio blob from backend, size:', audioBlob.size);
+        
+        // Check if this request was cancelled
+        if (currentRequestId !== this.requestId) {
+          console.log('[ElevenLabsTTS] Request cancelled after fetch (stale)');
+          this.speaking = false;
+          return;
+        }
       }
 
       // Convert blob to data URI using FileReader
@@ -212,6 +236,13 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
       console.log('[ElevenLabsTTS] Converting blob to data URI...');
       const dataUri = await blobToDataUri(audioBlob);
       console.log('[ElevenLabsTTS] Data URI length:', dataUri.length);
+      
+      // Check if this request was cancelled during conversion
+      if (currentRequestId !== this.requestId) {
+        console.log('[ElevenLabsTTS] Request cancelled after conversion (stale)');
+        this.speaking = false;
+        return;
+      }
 
       // Create and play sound directly from data URI (no file writing needed)
       console.log('[ElevenLabsTTS] Creating sound from data URI...');
@@ -220,6 +251,14 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
         { shouldPlay: true },
         this.handlePlaybackStatusUpdate.bind(this)
       );
+      
+      // Final check before assigning sound - if cancelled, unload immediately
+      if (currentRequestId !== this.requestId) {
+        console.log('[ElevenLabsTTS] Request cancelled after sound creation (stale)');
+        await sound.unloadAsync();
+        this.speaking = false;
+        return;
+      }
 
       this.sound = sound;
       console.log('[ElevenLabsTTS] Sound created and playing');
@@ -259,11 +298,34 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
   }
 
   stop(): void {
-    if (this.sound && this.speaking) {
+    // Increment request ID to cancel any pending requests
+    this.requestId++;
+    
+    if (this.sound) {
       this.sound.stopAsync().catch(() => {});
-      this.speaking = false;
       this.cleanupSound();
     }
+    this.speaking = false;
+  }
+
+  /**
+   * Async version of stop that waits for the sound to fully stop.
+   * Use this before starting a new sound to prevent overlap.
+   */
+  private async stopAsync(): Promise<void> {
+    // Increment request ID to cancel any pending requests
+    this.requestId++;
+    
+    if (this.sound) {
+      try {
+        await this.sound.stopAsync();
+        await this.sound.unloadAsync();
+      } catch {
+        // Ignore errors during cleanup
+      }
+      this.sound = null;
+    }
+    this.speaking = false;
   }
 
   pause(): void {

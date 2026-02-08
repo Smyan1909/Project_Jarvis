@@ -24,7 +24,7 @@ interface UseAgentStreamResult {
   messages: Message[];
   isLoading: boolean;
   error: string | null;
-  sendMessage: (content: string, onResponseReady?: (text: string) => void) => Promise<void>;
+  sendMessage: (content: string, onResponseReady?: (text: string, messageId: string) => void) => Promise<void>;
   cancelRun: () => void;
 }
 
@@ -140,7 +140,7 @@ export function useAgentStream(): UseAgentStreamResult {
     }
   }, []);
 
-  const sendMessage = useCallback(async (content: string, onResponseReady?: (text: string) => void): Promise<void> => {
+  const sendMessage = useCallback(async (content: string, onResponseReady?: (text: string, messageId: string) => void): Promise<void> => {
     setError(null);
     setIsLoading(true);
     streamingContentRef.current = '';
@@ -158,8 +158,9 @@ export function useAgentStream(): UseAgentStreamResult {
       getMockResponse(content, {
         onResponse: (fullContent) => {
           // Add assistant message with full content immediately
+          const messageId = `assistant-${Date.now()}`;
           const assistantMessage: Message = {
-            id: `assistant-${Date.now()}`,
+            id: messageId,
             role: 'assistant',
             content: fullContent,
             isStreaming: false,
@@ -167,8 +168,8 @@ export function useAgentStream(): UseAgentStreamResult {
           setMessages(prev => [...prev, assistantMessage]);
           setIsLoading(false);
           
-          // Trigger TTS callback immediately with full response
-          onResponseReady?.(fullContent);
+          // Trigger TTS callback immediately with full response and message ID
+          onResponseReady?.(fullContent, messageId);
         },
         onError: (errorMessage) => {
           setError(errorMessage);

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -28,11 +28,19 @@ interface Message {
 export function ChatScreen() {
   const [input, setInput] = useState('');
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(SPEECH_CONFIG.autoPlayResponses);
+  const [currentlyPlayingId, setCurrentlyPlayingId] = useState<string | null>(null);
   const { messages, isLoading, error, sendMessage } = useAgentStream();
   const { isSpeaking, speak, stop: stopSpeaking, error: ttsError } = useTextToSpeech();
   const flatListRef = useRef<FlatList>(null);
   const speechPanelRef = useRef<SpeechPanelRef>(null);
   const insets = useSafeAreaInsets();
+
+  // Clear currentlyPlayingId when audio finishes
+  useEffect(() => {
+    if (!isSpeaking && currentlyPlayingId) {
+      setCurrentlyPlayingId(null);
+    }
+  }, [isSpeaking, currentlyPlayingId]);
 
   // Toggle speech panel
   const toggleSpeechPanel = useCallback(() => {
@@ -51,13 +59,15 @@ export function ChatScreen() {
     // Stop any ongoing TTS before sending new message
     if (isSpeaking) {
       stopSpeaking();
+      setCurrentlyPlayingId(null);
     }
 
     setInput('');
     
     // Pass TTS callback - will be called immediately when response is ready
-    await sendMessage(trimmedInput, (responseText) => {
+    await sendMessage(trimmedInput, (responseText, messageId) => {
       if (ttsEnabled) {
+        setCurrentlyPlayingId(messageId);
         speak(responseText);
       }
     });
@@ -79,17 +89,29 @@ export function ChatScreen() {
     // Nothing to do - transcription was discarded
   }, []);
 
-  const handlePlayMessage = useCallback((content: string) => {
+  const handlePlayMessage = useCallback((messageId: string, content: string) => {
+    // If this message is already playing, stop it (don't restart)
+    if (currentlyPlayingId === messageId) {
+      if (isSpeaking) {
+        stopSpeaking();
+      }
+      setCurrentlyPlayingId(null);
+      return;
+    }
+    
+    // Stop any other playing message and start this one
     if (isSpeaking) {
       stopSpeaking();
     }
+    setCurrentlyPlayingId(messageId);
     speak(content);
-  }, [isSpeaking, stopSpeaking, speak]);
+  }, [currentlyPlayingId, isSpeaking, stopSpeaking, speak]);
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     const isStreaming = item.isStreaming && !item.content;
     const canPlay = !isUser && !isStreaming && item.content;
+    const isThisMessagePlaying = currentlyPlayingId === item.id && isSpeaking;
 
     return (
       <View
@@ -124,11 +146,11 @@ export function ChatScreen() {
         {canPlay && (
           <Pressable
             style={styles.playButton}
-            onPress={() => handlePlayMessage(item.content)}
+            onPress={() => handlePlayMessage(item.id, item.content)}
             hitSlop={8}
           >
             <Ionicons
-              name={isSpeaking ? 'stop-circle-outline' : 'play-circle-outline'}
+              name={isThisMessagePlaying ? 'stop-circle-outline' : 'play-circle-outline'}
               size={20}
               color={theme.colors.textTertiary}
             />
