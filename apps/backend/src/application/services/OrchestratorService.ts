@@ -46,6 +46,28 @@ import { createTracer, SpanKind, SpanStatusCode } from '../../infrastructure/obs
 const tracer = createTracer('orchestrator', '1.0.0');
 
 // =============================================================================
+// Session Tracking Constants
+// =============================================================================
+
+/**
+ * File operation tools that should trigger session_capture_file
+ */
+const FILE_OPERATION_TOOLS = new Set([
+  'fs.write_file',
+  'fs.delete_file',
+  'fs.create_directory',
+  'fs.delete_directory',
+  'fs.move',
+  'fs.copy',
+  // MCP filesystem tools (common naming patterns)
+  'write_file',
+  'delete_file',
+  'create_file',
+  'edit_file',
+  'rename_file',
+]);
+
+// =============================================================================
 // Orchestrator Configuration
 // =============================================================================
 
@@ -148,6 +170,9 @@ export class OrchestratorService {
     log.debug('State initialized');
 
     try {
+      // Start session for context continuity
+      await this.startSession(userId, runId);
+
       // Emit starting status
       await this.emitEvent({
         type: 'orchestrator.status',
@@ -218,6 +243,9 @@ export class OrchestratorService {
         }
       }
 
+      // End session with summary
+      await this.endSession(userId, runId, result.response || undefined);
+
       // Mark as completed
       await this.repository.updateOrchestratorStatus(runId, 'completed');
       await this.emitEvent({
@@ -270,6 +298,9 @@ export class OrchestratorService {
         errorMessage,
         errorStack,
       });
+
+      // End session on error
+      await this.endSession(userId, runId, `Session ended due to error: ${errorMessage}`);
 
       await this.repository.updateOrchestratorStatus(runId, 'failed');
       await this.emitEvent({
@@ -595,7 +626,21 @@ export class OrchestratorService {
       default:
         // Handle standard tools (direct execution)
         if (this.enableDirectExecution && !ORCHESTRATOR_ONLY_TOOL_IDS.has(toolCall.name)) {
-          return this.toolInvoker.invoke(userId, toolCall.name, args);
+          const result = await this.toolInvoker.invoke(userId, toolCall.name, args);
+          
+          // Capture file changes for session context
+          if (result.success && this.isFileOperationTool(toolCall.name)) {
+            const filePath = this.extractFilePath(toolCall.name, args);
+            if (filePath) {
+              const action = this.getFileAction(toolCall.name);
+              // Fire and forget - don't await to avoid slowing down the main flow
+              this.captureFileChange(userId, runId, filePath, action).catch(() => {
+                // Ignore errors in file capture
+              });
+            }
+          }
+          
+          return result;
         }
         return { success: false, error: `Unknown tool: ${toolCall.name}` };
     }
@@ -982,5 +1027,115 @@ export class OrchestratorService {
         console.error('Error emitting event:', error);
       }
     }
+  }
+
+  // ===========================================================================
+  // Session Lifecycle Methods
+  // ===========================================================================
+
+  /**
+   * Start a session for context continuity.
+   * Called at the beginning of executeRun.
+   */
+  private async startSession(userId: string, runId: string): Promise<void> {
+    const log = logger.child({ runId, userId, method: 'startSession' });
+    
+    try {
+      const result = await this.toolInvoker.invoke(userId, 'session_start', { runId });
+      if (result.success) {
+        log.debug('Session started', { output: result.output });
+      } else {
+        log.warn('Failed to start session', { error: result.error });
+      }
+    } catch (error) {
+      // Don't fail the run if session tracking fails
+      log.warn('Error starting session', { error });
+    }
+  }
+
+  /**
+   * End a session with an optional summary.
+   * Called when the run completes.
+   */
+  private async endSession(userId: string, runId: string, summary?: string): Promise<void> {
+    const log = logger.child({ runId, userId, method: 'endSession' });
+    
+    try {
+      const result = await this.toolInvoker.invoke(userId, 'session_end', { runId, summary });
+      if (result.success) {
+        log.debug('Session ended', { output: result.output });
+      } else {
+        log.warn('Failed to end session', { error: result.error });
+      }
+    } catch (error) {
+      // Don't fail the run if session tracking fails
+      log.warn('Error ending session', { error });
+    }
+  }
+
+  /**
+   * Capture a file operation for session context.
+   * Called after file-related tool calls complete.
+   */
+  private async captureFileChange(
+    userId: string,
+    runId: string,
+    filePath: string,
+    action: string,
+    description?: string
+  ): Promise<void> {
+    const log = logger.child({ runId, userId, method: 'captureFileChange' });
+    
+    try {
+      const result = await this.toolInvoker.invoke(userId, 'session_capture_file', {
+        runId,
+        filePath,
+        action,
+        description,
+      });
+      if (result.success) {
+        log.debug('File change captured', { filePath, action });
+      } else {
+        log.warn('Failed to capture file change', { error: result.error, filePath });
+      }
+    } catch (error) {
+      // Don't fail the run if session tracking fails
+      log.warn('Error capturing file change', { error, filePath });
+    }
+  }
+
+  /**
+   * Check if a tool is a file operation that should be tracked
+   */
+  private isFileOperationTool(toolName: string): boolean {
+    return FILE_OPERATION_TOOLS.has(toolName);
+  }
+
+  /**
+   * Extract file path from tool arguments
+   */
+  private extractFilePath(toolName: string, args: Record<string, unknown>): string | null {
+    // Common argument names for file paths
+    const pathKeys = ['path', 'filePath', 'file_path', 'source', 'destination', 'target'];
+    
+    for (const key of pathKeys) {
+      if (typeof args[key] === 'string') {
+        return args[key] as string;
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Determine the action type from tool name
+   */
+  private getFileAction(toolName: string): string {
+    if (toolName.includes('write') || toolName.includes('create')) return 'create';
+    if (toolName.includes('delete') || toolName.includes('remove')) return 'delete';
+    if (toolName.includes('edit') || toolName.includes('modify')) return 'modify';
+    if (toolName.includes('move') || toolName.includes('rename')) return 'rename';
+    if (toolName.includes('copy')) return 'copy';
+    return 'modify';
   }
 }
