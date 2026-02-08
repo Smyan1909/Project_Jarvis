@@ -5,6 +5,7 @@
     "version": "0.1.0",
     "sdkVersion": "54.0.0",
     "entryPoint": "./index.js",
+    "scheme": "projectjarvis",
     "android": {
       "package": "com.anonymous.projectjarvis",
       "permissions": [
@@ -18,6 +19,14 @@
         "NSSpeechRecognitionUsageDescription": "Allow Jarvis to use speech recognition for voice input.",
         "NSMicrophoneUsageDescription": "Allow Jarvis to use the microphone for voice input."
       }
-    }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#00D9FF"
+        }
+      ]
+    ]
   }
 }

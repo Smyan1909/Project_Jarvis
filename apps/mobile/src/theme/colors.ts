@@ -1,59 +1,71 @@
+// =============================================================================
+// Color Palette - Dark Mode (Coder-Friendly)
+// =============================================================================
+// Inspired by Iron Man's Jarvis HUD and modern IDE dark themes.
+// High contrast for readability, cyan primary color, green accents.
+
 export const colors = {
-  // Primary
-  primary: '#007AFF',
-  primaryLight: '#4DA3FF',
-  primaryDark: '#0055CC',
+  // Primary - Cyan (Jarvis HUD inspired)
+  primary: '#00D9FF',
+  primaryLight: '#5CE1FF',
+  primaryDark: '#00A8CC',
 
-  // Backgrounds
-  background: '#FFFFFF',
-  backgroundSecondary: '#F2F2F7',
-  backgroundTertiary: '#E5E5EA',
+  // Backgrounds - Deep dark (GitHub dark / IDE-like)
+  background: '#0D1117',
+  backgroundSecondary: '#161B22',
+  backgroundTertiary: '#21262D',
 
-  // Text
-  text: '#000000',
-  textSecondary: '#3C3C43',
-  textTertiary: '#8E8E93',
-  textInverse: '#FFFFFF',
+  // Text - High contrast for readability
+  text: '#E6EDF3',
+  textSecondary: '#8B949E',
+  textTertiary: '#6E7681',
+  textInverse: '#0D1117',
 
-  // Status
-  success: '#34C759',
-  warning: '#FF9500',
-  error: '#FF3B30',
-  info: '#5AC8FA',
+  // Status colors
+  success: '#3FB950',
+  warning: '#D29922',
+  error: '#F85149',
+  info: '#58A6FF',
 
-  // Chat
-  userBubble: '#007AFF',
-  assistantBubble: '#E5E5EA',
+  // Chat bubble colors
+  userBubble: '#238636',
+  assistantBubble: '#21262D',
   userBubbleText: '#FFFFFF',
-  assistantBubbleText: '#000000',
+  assistantBubbleText: '#E6EDF3',
 
-  // Borders
-  border: '#C6C6C8',
-  borderLight: '#E5E5EA',
+  // Accent colors
+  accent: '#A371F7',
+  accentSecondary: '#F778BA',
+
+  // Border colors
+  border: '#30363D',
+  borderLight: '#21262D',
+
+  // Agent type colors (for task observability)
+  agentGeneral: '#58A6FF',
+  agentResearch: '#A371F7',
+  agentCoding: '#3FB950',
+  agentScheduling: '#D29922',
+  agentProductivity: '#F778BA',
+  agentMessaging: '#00D9FF',
+
+  // Task status colors
+  taskPending: '#6E7681',
+  taskInProgress: '#00D9FF',
+  taskCompleted: '#3FB950',
+  taskFailed: '#F85149',
 
   // Misc
-  overlay: 'rgba(0, 0, 0, 0.4)',
-  shadow: 'rgba(0, 0, 0, 0.1)',
+  overlay: 'rgba(0, 0, 0, 0.7)',
+  shadow: 'rgba(0, 0, 0, 0.4)',
 
   // Speech/Recording
-  recording: '#FF3B30',
-  recordingLight: '#FF6961',
-  waveform: '#007AFF',
+  recording: '#F85149',
+  recordingLight: '#FF6B6B',
+  waveform: '#00D9FF',
 } as const;
 
-// Dark mode colors (for future)
-export const darkColors = {
-  ...colors,
-  background: '#000000',
-  backgroundSecondary: '#1C1C1E',
-  backgroundTertiary: '#2C2C2E',
-  text: '#FFFFFF',
-  textSecondary: '#EBEBF5',
-  textTertiary: '#8E8E93',
-  assistantBubble: '#2C2C2E',
-  assistantBubbleText: '#FFFFFF',
-  border: '#38383A',
-  borderLight: '#2C2C2E',
-} as const;
+// Dark mode colors (same as main colors since we're dark by default)
+export const darkColors = colors;
 
 export type Colors = typeof colors;

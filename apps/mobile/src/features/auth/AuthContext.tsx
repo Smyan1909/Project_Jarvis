@@ -1,20 +1,42 @@
+// =============================================================================
+// Auth Context
+// =============================================================================
+// Authentication state management using React Context and useReducer.
+
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
 import { authApi, setTokens, clearTokens, getAccessToken } from '../../services/api';
+import { registerForPushNotifications } from '../../services/pushNotifications';
+import { socketManager } from '../../services/websocket';
 import { DEMO_MODE } from '../../config';
+
+// =============================================================================
+// Types
+// =============================================================================
+
+interface User {
+  id: string;
+  email: string;
+  displayName: string | null;
+}
 
 interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
-  user: { email: string } | null;
+  user: User | null;
   error: string | null;
 }
 
 type AuthAction =
   | { type: 'AUTH_START' }
-  | { type: 'AUTH_SUCCESS'; payload: { email: string } }
+  | { type: 'AUTH_SUCCESS'; payload: User }
   | { type: 'AUTH_FAILURE'; payload: string }
   | { type: 'LOGOUT' }
-  | { type: 'RESTORE_TOKEN'; payload: boolean };
+  | { type: 'RESTORE_TOKEN'; payload: { isAuthenticated: boolean; user: User | null } }
+  | { type: 'CLEAR_ERROR' };
+
+// =============================================================================
+// Reducer
+// =============================================================================
 
 const initialState: AuthState = {
   isAuthenticated: false,
@@ -28,25 +50,47 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
     case 'AUTH_START':
       return { ...state, isLoading: true, error: null };
     case 'AUTH_SUCCESS':
-      return { ...state, isLoading: false, isAuthenticated: true, user: action.payload, error: null };
+      return {
+        ...state,
+        isLoading: false,
+        isAuthenticated: true,
+        user: action.payload,
+        error: null,
+      };
     case 'AUTH_FAILURE':
       return { ...state, isLoading: false, error: action.payload };
     case 'LOGOUT':
-      return { ...state, isAuthenticated: false, user: null };
+      return { ...state, isAuthenticated: false, user: null, error: null };
     case 'RESTORE_TOKEN':
-      return { ...state, isLoading: false, isAuthenticated: action.payload };
+      return {
+        ...state,
+        isLoading: false,
+        isAuthenticated: action.payload.isAuthenticated,
+        user: action.payload.user,
+      };
+    case 'CLEAR_ERROR':
+      return { ...state, error: null };
     default:
       return state;
   }
 }
 
+// =============================================================================
+// Context
+// =============================================================================
+
 interface AuthContextValue extends AuthState {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName?: string) => Promise<void>;
   logout: () => Promise<void>;
+  clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+// =============================================================================
+// Provider
+// =============================================================================
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, initialState);
@@ -54,18 +98,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Check for existing token on mount
   useEffect(() => {
     async function checkToken() {
-      // Bypass authentication in demo mode
+      // Demo mode: bypass authentication
       if (DEMO_MODE) {
-        dispatch({ type: 'AUTH_SUCCESS', payload: { email: 'demo@jarvis.local' } });
+        dispatch({
+          type: 'AUTH_SUCCESS',
+          payload: {
+            id: 'demo-user-id',
+            email: 'demo@jarvis.local',
+            displayName: 'Demo User',
+          },
+        });
         return;
       }
 
       try {
         const token = await getAccessToken();
-        dispatch({ type: 'RESTORE_TOKEN', payload: !!token });
+        if (token) {
+          // Try to get user info
+          try {
+            const user = await authApi.getMe();
+            dispatch({
+              type: 'RESTORE_TOKEN',
+              payload: {
+                isAuthenticated: true,
+                user: {
+                  id: user.id,
+                  email: user.email,
+                  displayName: user.displayName,
+                },
+              },
+            });
+
+            // Connect socket and register for push notifications
+            socketManager.connect().catch(console.error);
+            registerForPushNotifications().catch(console.error);
+          } catch (e) {
+            // Token might be expired
+            dispatch({ type: 'RESTORE_TOKEN', payload: { isAuthenticated: false, user: null } });
+          }
+        } else {
+          dispatch({ type: 'RESTORE_TOKEN', payload: { isAuthenticated: false, user: null } });
+        }
       } catch (err) {
         console.error('Error checking token:', err);
-        dispatch({ type: 'RESTORE_TOKEN', payload: false });
+        dispatch({ type: 'RESTORE_TOKEN', payload: { isAuthenticated: false, user: null } });
       }
     }
     checkToken();
@@ -74,10 +150,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     dispatch({ type: 'AUTH_START' });
     try {
-      const response = await authApi.login(email, password);
-      const { accessToken, refreshToken } = response.data.data;
-      await setTokens({ accessToken, refreshToken });
-      dispatch({ type: 'AUTH_SUCCESS', payload: { email } });
+      const { user, tokens } = await authApi.login(email, password);
+      await setTokens({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      });
+      dispatch({
+        type: 'AUTH_SUCCESS',
+        payload: {
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName,
+        },
+      });
+
+      // Connect socket and register for push notifications
+      socketManager.connect().catch(console.error);
+      registerForPushNotifications().catch(console.error);
     } catch (err: any) {
       const errorMessage = err.message || 'Login failed';
       dispatch({ type: 'AUTH_FAILURE', payload: errorMessage });
@@ -88,10 +177,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (email: string, password: string, displayName?: string) => {
     dispatch({ type: 'AUTH_START' });
     try {
-      const response = await authApi.register(email, password, displayName);
-      const { accessToken, refreshToken } = response.data.data;
-      await setTokens({ accessToken, refreshToken });
-      dispatch({ type: 'AUTH_SUCCESS', payload: { email } });
+      const { user, tokens } = await authApi.register(email, password, displayName);
+      await setTokens({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      });
+      dispatch({
+        type: 'AUTH_SUCCESS',
+        payload: {
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName,
+        },
+      });
+
+      // Connect socket and register for push notifications
+      socketManager.connect().catch(console.error);
+      registerForPushNotifications().catch(console.error);
     } catch (err: any) {
       const errorMessage = err.message || 'Registration failed';
       dispatch({ type: 'AUTH_FAILURE', payload: errorMessage });
@@ -107,15 +209,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Logout API error:', e);
     }
     await clearTokens();
+    socketManager.disconnect();
     dispatch({ type: 'LOGOUT' });
   };
 
+  const clearError = () => {
+    dispatch({ type: 'CLEAR_ERROR' });
+  };
+
   return (
-    <AuthContext.Provider value={{ ...state, login, register, logout }}>
+    <AuthContext.Provider value={{ ...state, login, register, logout, clearError }}>
       {children}
     </AuthContext.Provider>
   );
 }
+
+// =============================================================================
+// Hook
+// =============================================================================
 
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);

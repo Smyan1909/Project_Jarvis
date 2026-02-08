@@ -21,6 +21,7 @@ export type RootStackParamList = {
   Main: undefined;
   Conversation: { runId: string };
   SecretManagement: undefined;
+  Integrations: undefined;
   ToolDetails: { toolId: string };
 };
 

@@ -86,10 +86,15 @@ export class ElevenLabsTextToSpeech implements ITextToSpeechService {
    */
   private async isBackendAvailable(): Promise<boolean> {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      
       const response = await fetch(`${API_URL}/speech/health`, {
         method: 'GET',
-        signal: AbortSignal.timeout(3000), // 3 second timeout
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
       return response.ok;
     } catch {
       return false;

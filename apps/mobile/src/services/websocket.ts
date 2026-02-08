@@ -1,140 +1,178 @@
+// =============================================================================
+// WebSocket Service - Socket.io Client
+// =============================================================================
+// Real-time connection to backend using Socket.io for streaming events.
+
+import { io, Socket } from 'socket.io-client';
 import { getAccessToken } from './api';
-import { WS_URL } from '../config';
+import { SOCKET_URL, DEMO_MODE } from '../config';
+
+// =============================================================================
+// Types
+// =============================================================================
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
-export interface WebSocketManager {
-  connect: () => Promise<void>;
-  disconnect: () => void;
-  subscribe: (runId: string, callback: (event: AgentEvent) => void) => () => void;
-  getStatus: () => ConnectionStatus;
-  onStatusChange: (callback: (status: ConnectionStatus) => void) => () => void;
-}
-
-// Agent event types (from shared-types)
-export type AgentEvent =
+// Re-export StreamEvent type for convenience
+// In production, import from @project-jarvis/shared-types
+export type StreamEvent =
   | { type: 'agent.token'; token: string }
   | { type: 'agent.tool_call'; toolId: string; toolName: string; input: unknown }
   | { type: 'agent.tool_result'; toolId: string; output: unknown; success: boolean }
   | { type: 'agent.final'; content: string; usage?: { totalTokens: number; totalCost: number } }
   | { type: 'agent.error'; message: string; code?: string }
-  | { type: 'agent.status'; status: 'running' | 'completed' | 'failed' | 'cancelled' };
+  | { type: 'agent.status'; status: 'running' | 'completed' | 'failed' | 'cancelled' }
+  | { type: 'orchestrator.status'; status: string; message?: string }
+  | { type: 'plan.created'; planId: string; taskCount: number; structure: string; tasks: any[] }
+  | { type: 'plan.modified'; planId: string; modification: string; reason: string; affectedTaskIds: string[] }
+  | { type: 'task.started'; taskId: string; description: string; agentType: string; agentId: string }
+  | { type: 'task.progress'; taskId: string; agentId: string; progress: string }
+  | { type: 'task.completed'; taskId: string; success: boolean; result?: unknown; error?: string }
+  | { type: 'agent.spawned'; agentId: string; taskId: string; agentType: string; taskDescription: string }
+  | { type: 'agent.reasoning'; agentId: string; step: { id: string; type: string; content: string } }
+  | { type: 'agent.intervention'; agentId: string; taskId: string; reason: string; action: string; guidance?: string }
+  | { type: 'agent.terminated'; agentId: string; taskId: string; reason: string; error?: string }
+  | { type: 'monitoring.event_received'; eventId: string; triggerType: string; toolkit: string; title: string; summary: string }
+  | { type: string; [key: string]: unknown };
 
-export function createWebSocketManager(): WebSocketManager {
-  let socket: WebSocket | null = null;
+// Backwards compatibility alias
+export type AgentEvent = StreamEvent;
+
+export interface SocketManager {
+  connect: () => Promise<void>;
+  disconnect: () => void;
+  subscribeToRun: (runId: string, callback: (event: StreamEvent) => void) => () => void;
+  getStatus: () => ConnectionStatus;
+  onStatusChange: (callback: (status: ConnectionStatus) => void) => () => void;
+  isConnected: () => boolean;
+}
+
+// =============================================================================
+// Socket Manager Factory
+// =============================================================================
+
+export function createSocketManager(): SocketManager {
+  let socket: Socket | null = null;
   let status: ConnectionStatus = 'disconnected';
-  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 5;
 
   const statusListeners = new Set<(status: ConnectionStatus) => void>();
-  const runListeners = new Map<string, Set<(event: AgentEvent) => void>>();
+  const runListeners = new Map<string, Set<(event: StreamEvent) => void>>();
 
   function setStatus(newStatus: ConnectionStatus) {
     status = newStatus;
-    statusListeners.forEach(cb => cb(status));
+    statusListeners.forEach((cb) => cb(status));
   }
 
   async function connect(): Promise<void> {
-    if (socket?.readyState === WebSocket.OPEN) {
+    // Skip in demo mode
+    if (DEMO_MODE) {
+      console.log('[Socket] Demo mode - skipping connection');
+      return;
+    }
+
+    // Already connected
+    if (socket?.connected) {
+      return;
+    }
+
+    // Get auth token
+    const token = await getAccessToken();
+    if (!token) {
+      console.log('[Socket] No access token available');
+      setStatus('error');
       return;
     }
 
     setStatus('connecting');
 
-    const token = await getAccessToken();
-    if (!token) {
-      setStatus('error');
-      throw new Error('No access token available');
-    }
-
     return new Promise((resolve, reject) => {
-      socket = new WebSocket(WS_URL);
+      socket = io(SOCKET_URL, {
+        auth: { token },
+        transports: ['websocket'],
+        reconnection: true,
+        reconnectionAttempts: maxReconnectAttempts,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 10000,
+      });
 
-      socket.onopen = () => {
-        // Authenticate
-        socket?.send(JSON.stringify({ type: 'auth', token }));
-      };
+      socket.on('connect', () => {
+        console.log('[Socket] Connected');
+        setStatus('connected');
+        reconnectAttempts = 0;
+        resolve();
+      });
 
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          // Handle auth response
-          if (data.type === 'auth.success') {
-            setStatus('connected');
-            reconnectAttempts = 0;
-            resolve();
-            return;
-          }
-
-          if (data.type === 'auth.error') {
-            setStatus('error');
-            reject(new Error(data.message));
-            return;
-          }
-
-          // Handle run events
-          if (data.runId && runListeners.has(data.runId)) {
-            runListeners.get(data.runId)?.forEach(cb => cb(data.event));
-          }
-
-          // Handle global agent events (format: run:<runId>)
-          const runIdMatch = data.channel?.match(/^run:(.+)$/);
-          if (runIdMatch && runListeners.has(runIdMatch[1])) {
-            runListeners.get(runIdMatch[1])?.forEach(cb => cb(data.event));
-          }
-        } catch (e) {
-          console.error('WebSocket message parse error:', e);
-        }
-      };
-
-      socket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setStatus('error');
-      };
-
-      socket.onclose = () => {
+      socket.on('disconnect', (reason) => {
+        console.log('[Socket] Disconnected:', reason);
         setStatus('disconnected');
-        socket = null;
+      });
 
-        // Attempt reconnect
-        if (reconnectAttempts < maxReconnectAttempts) {
-          reconnectAttempts++;
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-          reconnectTimeout = setTimeout(() => {
-            connect().catch(console.error);
-          }, delay);
+      socket.on('connect_error', (error) => {
+        console.error('[Socket] Connection error:', error.message);
+        reconnectAttempts++;
+        if (reconnectAttempts >= maxReconnectAttempts) {
+          setStatus('error');
+          reject(error);
         }
-      };
+      });
+
+      // Handle agent events broadcast to user
+      socket.on('agent:event', (event: StreamEvent) => {
+        // Broadcast to all run listeners (for events not specific to a run)
+        runListeners.forEach((listeners) => {
+          listeners.forEach((cb) => cb(event));
+        });
+      });
+
+      // Handle run-specific events
+      socket.onAny((eventName: string, event: StreamEvent) => {
+        // Check if event is for a specific run (format: run:<runId>)
+        if (eventName.startsWith('run:')) {
+          const runId = eventName.slice(4);
+          const listeners = runListeners.get(runId);
+          if (listeners) {
+            listeners.forEach((cb) => cb(event));
+          }
+        }
+      });
     });
   }
 
-  function disconnect() {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout);
-      reconnectTimeout = null;
+  function disconnect(): void {
+    if (socket) {
+      socket.disconnect();
+      socket = null;
     }
-    reconnectAttempts = maxReconnectAttempts; // Prevent reconnect
-    socket?.close();
-    socket = null;
     setStatus('disconnected');
   }
 
-  function subscribe(runId: string, callback: (event: AgentEvent) => void): () => void {
+  function subscribeToRun(runId: string, callback: (event: StreamEvent) => void): () => void {
+    // Add listener
     if (!runListeners.has(runId)) {
       runListeners.set(runId, new Set());
     }
     runListeners.get(runId)!.add(callback);
 
-    // Subscribe to run channel
-    socket?.send(JSON.stringify({ type: 'subscribe', channel: `run:${runId}` }));
+    // Subscribe to run events via socket
+    if (socket?.connected) {
+      socket.emit('subscribe:run', runId);
+    }
 
+    // Return unsubscribe function
     return () => {
-      runListeners.get(runId)?.delete(callback);
-      if (runListeners.get(runId)?.size === 0) {
-        runListeners.delete(runId);
-        socket?.send(JSON.stringify({ type: 'unsubscribe', channel: `run:${runId}` }));
+      const listeners = runListeners.get(runId);
+      if (listeners) {
+        listeners.delete(callback);
+        if (listeners.size === 0) {
+          runListeners.delete(runId);
+          // Unsubscribe from run events
+          if (socket?.connected) {
+            socket.emit('unsubscribe:run', runId);
+          }
+        }
       }
     };
   }
@@ -145,17 +183,30 @@ export function createWebSocketManager(): WebSocketManager {
 
   function onStatusChange(callback: (status: ConnectionStatus) => void): () => void {
     statusListeners.add(callback);
+    // Immediately call with current status
+    callback(status);
     return () => statusListeners.delete(callback);
+  }
+
+  function isConnected(): boolean {
+    return socket?.connected ?? false;
   }
 
   return {
     connect,
     disconnect,
-    subscribe,
+    subscribeToRun,
     getStatus,
     onStatusChange,
+    isConnected,
   };
 }
 
-// Singleton instance
-export const wsManager = createWebSocketManager();
+// =============================================================================
+// Singleton Instance
+// =============================================================================
+
+export const socketManager = createSocketManager();
+
+// Backwards compatibility
+export const wsManager = socketManager;
