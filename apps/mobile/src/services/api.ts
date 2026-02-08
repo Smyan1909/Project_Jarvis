@@ -251,6 +251,8 @@ export const orchestratorApi = {
       },
       body: JSON.stringify({ input, model }),
       signal,
+      // Enable text streaming for react-native-fetch-api polyfill
+      reactNative: { textStreaming: true },
     });
   },
 
