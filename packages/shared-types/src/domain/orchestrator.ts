@@ -290,6 +290,7 @@ export const SpawnAgentConfigSchema = z.object({
   upstreamContext: z.string().nullable(),
   additionalTools: z.array(z.string()).default([]),
   instructions: z.string().optional(),  // Optional extra instructions from orchestrator
+  userId: z.string().uuid(),  // User ID for tool permissions and per-user integrations
 });
 
 export type SpawnAgentConfig = z.infer<typeof SpawnAgentConfigSchema>;

@@ -203,7 +203,7 @@ export class CompositeToolInvoker implements ToolInvokerPort {
     try {
       this.log.debug('Invoking MCP tool', { userId, toolId, input });
 
-      const result = await this.mcpManager.invokeToolAsToolResult(toolId, input);
+      const result = await this.mcpManager.invokeToolAsToolResult(userId, toolId, input);
       const durationMs = Date.now() - startTime;
 
       this.log.info('MCP tool invocation completed', {

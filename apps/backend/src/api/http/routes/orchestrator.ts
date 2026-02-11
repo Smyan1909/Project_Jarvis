@@ -50,6 +50,14 @@ import { MessageRepository, ConversationSummaryRepository, UserRepository, Agent
 import { MCPClientManager, type MCPConfigLoader } from '../../../adapters/mcp/MCPClientManager.js';
 import { CompositeToolInvoker } from '../../../adapters/tools/CompositeToolInvoker.js';
 
+// Composio Integration
+import { 
+  ComposioIntegrationService, 
+  getComposioClient 
+} from '@project-jarvis/mcp-servers';
+import { ComposioSessionManager } from '../../../application/services/ComposioSessionManager.js';
+import { db } from '../../../infrastructure/db/client.js';
+
 // LLM and Tools
 import { llmRouter } from '../../../application/services/LLMRouterService.js';
 import { logger } from '../../../infrastructure/logging/logger.js';
@@ -224,6 +232,21 @@ async function initializeToolRegistry(): Promise<void> {
       log.info('MCP client manager initialized', {
         servers: mcpClientManager.getServerIds(),
       });
+
+      // Initialize Composio session manager for per-user sessions
+      try {
+        const composioClient = getComposioClient();
+        const composioService = new ComposioIntegrationService(
+          composioClient,
+          process.env.COMPOSIO_CALLBACK_SCHEME || 'jarvis://'
+        );
+        const composioSessionManager = new ComposioSessionManager(db, composioService);
+        mcpClientManager.setComposioSessionManager(composioSessionManager);
+        log.info('Composio session manager configured for per-user sessions');
+      } catch (composioError) {
+        log.warn('Failed to initialize Composio session manager - continuing without per-user sessions', 
+          composioError as Record<string, unknown>);
+      }
     } else {
       log.info('No MCP servers configured, skipping MCP initialization');
     }

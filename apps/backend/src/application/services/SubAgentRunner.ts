@@ -42,6 +42,8 @@ export interface SubAgentConfig {
   additionalTools: string[];
   instructions?: string;
   maxIterations?: number;
+  /** User ID for tool invocation permissions and per-user integrations */
+  userId: string;
 }
 
 // =============================================================================
@@ -336,7 +338,7 @@ export class SubAgentRunner extends EventEmitter {
     try {
       // Execute the tool
       const result = await this.toolInvoker.invoke(
-        'user', // TODO: Get actual user ID from context
+        this.config.userId,
         tc.name,
         JSON.parse(tc.arguments)
       );
@@ -397,7 +399,7 @@ export class SubAgentRunner extends EventEmitter {
 
   private async getToolDefinitions(toolIds: string[]): Promise<ToolDefinition[]> {
     // Get all tools and filter to allowed ones
-    const allTools = await this.toolInvoker.getTools('user'); // TODO: Get actual user ID
+    const allTools = await this.toolInvoker.getTools(this.config.userId);
     return allTools.filter(t => toolIds.includes(t.id));
   }
 

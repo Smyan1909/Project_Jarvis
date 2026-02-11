@@ -21,6 +21,9 @@ export const users = pgTable('users', {
     displayName: varchar('display_name', { length: 255 }),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    // Composio session for per-user tool calling
+    composioSessionId: varchar('composio_session_id', { length: 255 }),
+    composioMcpUrl: varchar('composio_mcp_url', { length: 2048 }),
 });
 
 export const userSecrets = pgTable('user_secrets', {

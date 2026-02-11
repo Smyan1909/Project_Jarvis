@@ -21,8 +21,14 @@ import {
   MCP_TOOL_SEPARATOR,
 } from './MCPToolConverter.js';
 import { logger } from '../../infrastructure/logging/logger.js';
+import type { ComposioSessionManager } from '../../application/services/ComposioSessionManager.js';
 
 const log = logger.child({ module: 'MCPClientManager' });
+
+/**
+ * Name used for Composio MCP servers
+ */
+const COMPOSIO_SERVER_NAME = 'composio';
 
 /**
  * Interface for loading MCP server configurations
@@ -47,7 +53,20 @@ export class MCPClientManager implements MCPClientManagerPort {
   private eventHandlers: MCPClientEvents = {};
   private initialized = false;
 
+  // Per-user Composio clients: Map<userId, MCPClientAdapter>
+  private composioClients: Map<string, MCPClientAdapter> = new Map();
+  private composioSessionManager: ComposioSessionManager | null = null;
+
   constructor(private configLoader: MCPConfigLoader) {}
+
+  /**
+   * Set the Composio session manager for per-user session support.
+   * This should be called after initialization to enable per-user Composio clients.
+   */
+  setComposioSessionManager(manager: ComposioSessionManager): void {
+    this.composioSessionManager = manager;
+    log.info('Composio session manager configured for per-user sessions');
+  }
 
   async initialize(): Promise<void> {
     if (this.initialized) {
@@ -190,13 +209,30 @@ export class MCPClientManager implements MCPClientManagerPort {
     return parseToolId(toolId);
   }
 
-  async invokeTool(toolId: string, args: Record<string, unknown>): Promise<MCPToolResult> {
+  async invokeTool(
+    userId: string,
+    toolId: string, 
+    args: Record<string, unknown>
+  ): Promise<MCPToolResult> {
     const parsed = parseToolId(toolId);
     if (!parsed) {
       throw new Error(`Invalid MCP tool ID: ${toolId}`);
     }
 
     const [serverName, toolName] = parsed;
+
+    // Special handling for Composio - use per-user clients
+    if (serverName === COMPOSIO_SERVER_NAME && this.composioSessionManager) {
+      const client = await this.getOrCreateComposioClient(userId);
+      log.debug('Invoking Composio tool with per-user client', { 
+        userId, 
+        toolId, 
+        toolName 
+      });
+      return client.callTool(toolName, args);
+    }
+
+    // Default: use shared client for non-Composio servers
     const serverId = this.serverNameToId.get(serverName);
 
     if (!serverId) {
@@ -217,8 +253,13 @@ export class MCPClientManager implements MCPClientManagerPort {
    * Invoke a tool and convert result to our ToolResult format
    *
    * This is the main method used by the CompositeToolInvoker
+   * 
+   * @param userId - The user invoking the tool (required for per-user Composio sessions)
+   * @param toolId - The tool ID to invoke
+   * @param args - Tool arguments
    */
   async invokeToolAsToolResult(
+    userId: string,
     toolId: string,
     args: Record<string, unknown>
   ): Promise<{ success: boolean; output: unknown; error?: string }> {
@@ -233,11 +274,11 @@ export class MCPClientManager implements MCPClientManagerPort {
         log.debug('Processed Composio args', { toolId, processedArgs: JSON.stringify(processedArgs) });
       }
       
-      const result = await this.invokeTool(toolId, processedArgs);
+      const result = await this.invokeTool(userId, toolId, processedArgs);
       return convertMCPToolResult(result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error('MCP tool invocation failed', { toolId, error: errorMessage });
+      log.error('MCP tool invocation failed', { userId, toolId, error: errorMessage });
       return {
         success: false,
         output: null,
@@ -427,6 +468,79 @@ export class MCPClientManager implements MCPClientManagerPort {
       oldConfig.requestTimeoutMs !== newConfig.requestTimeoutMs ||
       oldConfig.maxRetries !== newConfig.maxRetries
     );
+  }
+
+  /**
+   * Get or create a per-user Composio MCP client.
+   * 
+   * Creates a session for the user if one doesn't exist, then creates
+   * an MCPClientAdapter connected to the user's personal Composio MCP endpoint.
+   */
+  private async getOrCreateComposioClient(userId: string): Promise<MCPClientAdapter> {
+    // Check cache first
+    if (this.composioClients.has(userId)) {
+      const cachedClient = this.composioClients.get(userId)!;
+      log.debug('Using cached Composio client', { userId });
+      return cachedClient;
+    }
+
+    if (!this.composioSessionManager) {
+      throw new Error('Composio session manager not configured');
+    }
+
+    log.info('Creating per-user Composio client', { userId });
+
+    // Get or create session for this user
+    const session = await this.composioSessionManager.getOrCreateSession(userId);
+
+    // Create MCP config from session
+    const config: MCPServerConfig = {
+      id: `composio-user-${userId}`,
+      name: COMPOSIO_SERVER_NAME,
+      description: `Per-user Composio session for ${userId}`,
+      url: session.mcp.url,
+      transport: 'streamable-http',
+      enabled: true,
+      authType: 'none', // Auth is handled by the session URL
+      authConfig: { type: 'none' },
+      connectionTimeoutMs: 30000,
+      requestTimeoutMs: 120000,
+      maxRetries: 3,
+      priority: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Create and connect client
+    const client = new MCPClientAdapter(config);
+    client.setEventHandlers(this.eventHandlers);
+
+    // Store in cache
+    this.composioClients.set(userId, client);
+
+    log.info('Created per-user Composio client', { 
+      userId, 
+      sessionId: session.sessionId 
+    });
+
+    return client;
+  }
+
+  /**
+   * Clear a user's Composio client from the cache.
+   * Call this when a user's session is refreshed.
+   */
+  async clearComposioClient(userId: string): Promise<void> {
+    const client = this.composioClients.get(userId);
+    if (client) {
+      try {
+        await client.disconnect();
+      } catch (error) {
+        log.warn('Error disconnecting Composio client', { userId, error });
+      }
+      this.composioClients.delete(userId);
+      log.info('Cleared Composio client', { userId });
+    }
   }
 }
 
