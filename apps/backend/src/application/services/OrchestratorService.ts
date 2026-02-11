@@ -597,7 +597,7 @@ export class OrchestratorService {
         return this.handleModifyPlan(runId, args);
 
       case 'start_agent':
-        return this.handleStartAgent(runId, args, activeAgents);
+        return this.handleStartAgent(userId, runId, args, activeAgents);
 
       case 'monitor_agent':
         return this.handleMonitorAgent(args.agentId);
@@ -725,6 +725,7 @@ export class OrchestratorService {
   }
 
   private async handleStartAgent(
+    userId: string,
     runId: string,
     args: { taskId: string; additionalTools?: string[]; instructions?: string },
     activeAgents: Map<string, AgentHandle>
@@ -754,6 +755,7 @@ export class OrchestratorService {
       upstreamContext: upstreamContext || null,
       additionalTools: args.additionalTools || [],
       instructions: args.instructions,
+      userId,
     });
 
     // Track the agent

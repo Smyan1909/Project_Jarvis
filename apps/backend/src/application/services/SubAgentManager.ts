@@ -106,6 +106,7 @@ export class SubAgentManager {
         upstreamContext: config.upstreamContext,
         additionalTools: config.additionalTools,
         instructions: config.instructions,
+        userId: config.userId,
       },
       this.llmProvider,
       this.toolInvoker,

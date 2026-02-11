@@ -167,12 +167,14 @@ export interface MCPClientManagerPort {
    * Invoke a tool on the appropriate server
    *
    * Automatically routes to the correct server based on tool ID prefix.
+   * For Composio tools, uses per-user sessions based on userId.
    *
+   * @param userId - User ID for per-user session routing
    * @param toolId - Full tool ID including server prefix
    * @param args - Tool arguments
    * @returns Tool execution result
    */
-  invokeTool(toolId: string, args: Record<string, unknown>): Promise<MCPToolResult>;
+  invokeTool(userId: string, toolId: string, args: Record<string, unknown>): Promise<MCPToolResult>;
 
   /**
    * Refresh server configuration from database
