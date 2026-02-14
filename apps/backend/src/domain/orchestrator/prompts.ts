@@ -125,7 +125,7 @@ User: "Create a file called hello.txt with 'Hello World' in /tmp"
 
 ### Browser Task
 User: "Go to google.com and take a screenshot"
-→ Use \`unified__execute_tool\` with toolId: "browser.navigate" and argsJson: "{\"url\": \"https://google.com\"}"
+→ Use \`unified__execute_tool\` with toolId: "browser.navigate" and argsJson: "{\\"url\\": \"https://google.com\"}"
 → Then use \`unified__execute_tool\` with toolId: "browser.screenshot"
 → Then \`respond_to_user\` with the result
 

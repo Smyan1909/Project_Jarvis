@@ -196,6 +196,7 @@ class EnvMCPConfigLoader implements MCPConfigLoader {
 // Create MCP client manager (will be null if no MCP servers configured)
 let mcpClientManager: MCPClientManager | null = null;
 let compositeToolInvoker: CompositeToolInvoker | null = null;
+let composioSessionManager: ComposioSessionManager | null = null;
 
 // Register all tools and initialize MCP
 async function initializeToolRegistry(): Promise<void> {
@@ -244,7 +245,7 @@ async function initializeToolRegistry(): Promise<void> {
           composioClient,
           process.env.COMPOSIO_CALLBACK_SCHEME || 'jarvis://'
         );
-        const composioSessionManager = new ComposioSessionManager(db, composioService);
+        composioSessionManager = new ComposioSessionManager(db, composioService);
         mcpClientManager.setComposioSessionManager(composioSessionManager);
         log.info('Composio session manager configured for per-user sessions');
       } catch (composioError) {
@@ -319,6 +320,7 @@ export function createOrchestratorService(onEvent: (event: StreamEvent) => void)
     contextManager,
     conversationHistoryService,
     agentRunRepository,
+    composioSessionManager || undefined,
     { onEvent }
   );
 }
@@ -328,6 +330,13 @@ export function createOrchestratorService(onEvent: (event: StreamEvent) => void)
  */
 export function getMCPClientManager(): MCPClientManager | null {
   return mcpClientManager;
+}
+
+/**
+ * Get the Composio session manager (for use by connection routes)
+ */
+export function getComposioSessionManager(): ComposioSessionManager | null {
+  return composioSessionManager;
 }
 
 /**

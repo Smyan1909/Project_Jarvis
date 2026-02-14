@@ -9,7 +9,7 @@ import { logger } from 'hono/logger';
 import { HTTPException } from 'hono/http-exception';
 import { healthRoutes } from './routes/health.js';
 import { chatRoutes } from './routes/chat.js';
-import { orchestratorRoutes, getMCPClientManager, getToolRegistry } from './routes/orchestrator.js';
+import { orchestratorRoutes, getMCPClientManager, getComposioSessionManager, getToolRegistry } from './routes/orchestrator.js';
 import { createMCPRoutes, createMCPToolsRoutes } from './routes/mcp.js';
 import { MCPServerService } from '../../application/services/MCPServerService.js';
 import { authRoutes } from './routes/auth.js';
@@ -107,13 +107,14 @@ app.route('/api/v1/orchestrator', orchestratorRoutes);
 // MCP tools debug routes - simple direct implementation
 app.get('/api/v1/mcp/tools', async (c) => {
   const mcpClientManager = getMCPClientManager();
+  const userId = c.req.query('userId');
   
   if (!mcpClientManager) {
     return c.json({ error: 'MCP client manager not available', tools: [] });
   }
 
   try {
-    const tools = await mcpClientManager.getToolDefinitions();
+    const tools = await mcpClientManager.getToolDefinitions(userId);
     return c.json({ tools, count: tools.length });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -130,6 +131,43 @@ app.get('/api/v1/mcp/status', async (c) => {
 
   const servers = mcpClientManager.getAllServerStatus();
   return c.json({ servers });
+});
+
+// =============================================================================
+// Composio Session Refresh Route
+// =============================================================================
+// Called by mobile app after successful OAuth connection to refresh session
+
+app.post('/api/v1/composio/refresh-session', async (c) => {
+  try {
+    const { userId } = await c.req.json();
+    
+    if (!userId) {
+      return c.json({ error: 'userId is required' }, 400);
+    }
+    
+    const sessionManager = getComposioSessionManager();
+    const mcpManager = getMCPClientManager();
+    
+    if (!sessionManager || !mcpManager) {
+      return c.json({ error: 'Composio services not available' }, 503);
+    }
+    
+    // Clear the cached client to force new session creation
+    await mcpManager.clearComposioClient(userId);
+    
+    // Refresh the session to pick up new connections
+    const session = await sessionManager.refreshSession(userId);
+    
+    return c.json({ 
+      success: true, 
+      message: 'Session refreshed successfully',
+      sessionId: session.sessionId 
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return c.json({ error: errorMessage }, 500);
+  }
 });
 
 // =============================================================================

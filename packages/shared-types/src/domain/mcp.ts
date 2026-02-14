@@ -75,6 +75,7 @@ export const MCPServerConfigSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(1024).optional(),
   url: z.string().url(),
+  headers: z.record(z.string(), z.string()).optional(),
   transport: MCPTransportTypeSchema,
   authType: MCPAuthTypeSchema,
   authConfig: MCPAuthConfigSchema.optional(),

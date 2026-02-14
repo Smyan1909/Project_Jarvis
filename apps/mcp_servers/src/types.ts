@@ -15,7 +15,7 @@ import { z } from 'zod';
 export const CreateSessionRequestSchema = z.object({
   userId: z.string().min(1, 'userId is required'),
   /** Optional: disable in-chat connection management */
-  manageConnections: z.boolean().optional().default(true),
+  manageConnections: z.boolean().optional().default(false),
   /** Optional: custom callback URL override */
   callbackUrl: z.string().url().optional(),
 });

@@ -5,6 +5,7 @@
 // Each user gets their own Composio session linked to their OAuth connections.
 
 import { eq } from 'drizzle-orm';
+import { SUPPORTED_TOOLKITS } from '@project-jarvis/mcp-servers';
 import type { 
   ComposioIntegrationService, 
   SessionInfo 
@@ -37,6 +38,7 @@ interface UserRow {
   id: string;
   composioSessionId: string | null;
   composioMcpUrl: string | null;
+  composioMcpHeaders: any;
 }
 
 /**
@@ -44,8 +46,8 @@ interface UserRow {
  */
 const DEFAULT_META_TOOLS = [
   'COMPOSIO_SEARCH_TOOLS',
-  'COMPOSIO_MANAGE_CONNECTIONS',
   'COMPOSIO_MULTI_EXECUTE_TOOL',
+
   'COMPOSIO_REMOTE_WORKBENCH',
   'COMPOSIO_REMOTE_BASH_TOOL',
   'COMPOSIO_GET_TOOL_SCHEMAS',
@@ -67,30 +69,40 @@ export class ComposioSessionManager {
   ) {}
 
   /**
-   * Get an existing session or create a new one for the user.
+   * Get or create an existing session or create a new one for the user.
    * 
    * This is the main entry point for getting a user's Composio session.
    * Sessions are cached in the database and reused across requests.
    * 
    * @param userId - The user's ID
+   * @param options - Optional session creation options
    * @returns SessionInfo with MCP connection details
    */
-  async getOrCreateSession(userId: string): Promise<SessionInfo> {
-    log.debug('Getting or creating Composio session', { userId });
+  async getOrCreateSession(userId: string, options?: { forceRefresh?: boolean }): Promise<SessionInfo> {
+    log.debug('Getting or creating Composio session', { userId, forceRefresh: options?.forceRefresh });
 
-    // 1. Check if user has an existing session in DB
-    const existingSession = await this.getExistingSession(userId);
-    if (existingSession) {
-      log.debug('Found existing Composio session', { 
-        userId, 
-        sessionId: existingSession.sessionId 
-      });
-      return existingSession;
+    if (!options?.forceRefresh) {
+      // 1. Check if user has an existing session in DB
+      const existingSession = await this.getExistingSession(userId);
+      if (existingSession) {
+        log.debug('Found existing Composio session', { 
+          userId, 
+          sessionId: existingSession.sessionId 
+        });
+        return existingSession;
+      }
     }
 
     // 2. Create a new session via Composio SDK
     log.info('Creating new Composio session', { userId });
-    const newSession = await this.createAndStoreSession(userId);
+    
+    // Scope sessions to supported toolkits only
+    const toolkits = this.composioService.getSupportedToolkitSlugs();
+    if (toolkits.length > 0) {
+      log.info('Scoping Composio session to supported toolkits', { userId, toolkits });
+    }
+
+    const newSession = await this.createAndStoreSession(userId, toolkits);
     
     log.info('Created Composio session', { 
       userId, 
@@ -98,6 +110,36 @@ export class ComposioSessionManager {
     });
     
     return newSession;
+  }
+
+  /**
+   * Get active integration names for a user to provide context to the LLM.
+   */
+  async getActiveIntegrations(userId: string): Promise<string[]> {
+    try {
+      const accounts = await this.composioService.listUserAccounts(userId);
+      return accounts
+        .filter((account) => String(account.status).toLowerCase() === 'active')
+        .map((account) => account.toolkit.name || account.toolkit.slug)
+        .filter((name) => name && name.trim().length > 0);
+    } catch (error) {
+      log.warn('Failed to get active integrations', { userId, error });
+      return [];
+    }
+  }
+
+  /**
+   * Get the list of supported integration names.
+   */
+  getSupportedIntegrations(): string[] {
+    return Object.values(SUPPORTED_TOOLKITS).map((toolkit) => toolkit.name);
+  }
+
+  /**
+   * Get the list of supported toolkit slugs.
+   */
+  getSupportedToolkitSlugs(): string[] {
+    return this.composioService.getSupportedToolkitSlugs();
   }
 
   /**
@@ -112,17 +154,8 @@ export class ComposioSessionManager {
    * @returns New SessionInfo
    */
   async refreshSession(userId: string): Promise<SessionInfo> {
-    log.info('Refreshing Composio session', { userId });
-    
-    // Create new session and overwrite existing
-    const newSession = await this.createAndStoreSession(userId);
-    
-    log.info('Refreshed Composio session', { 
-      userId, 
-      sessionId: newSession.sessionId 
-    });
-    
-    return newSession;
+    await this.clearSession(userId);
+    return this.getOrCreateSession(userId, { forceRefresh: true });
   }
 
   /**
@@ -148,7 +181,9 @@ export class ComposioSessionManager {
       .set({
         composioSessionId: null,
         composioMcpUrl: null,
+        composioMcpHeaders: null,
       } as Partial<UserRow>)
+
       .where(eq(users.id, userId));
   }
 
@@ -171,8 +206,8 @@ export class ComposioSessionManager {
 
     const user = rows[0];
     
-    // Check if session exists
-    if (!user.composioSessionId || !user.composioMcpUrl) {
+    // Check if session exists and has required headers
+    if (!user.composioSessionId || !user.composioMcpUrl || !user.composioMcpHeaders) {
       return null;
     }
 
@@ -182,7 +217,7 @@ export class ComposioSessionManager {
       mcp: {
         type: 'http',
         url: user.composioMcpUrl,
-        headers: {},
+        headers: user.composioMcpHeaders as Record<string, string>,
       },
       metaTools: DEFAULT_META_TOOLS,
     };
@@ -191,11 +226,12 @@ export class ComposioSessionManager {
   /**
    * Create a new session via Composio SDK and store in database.
    */
-  private async createAndStoreSession(userId: string): Promise<SessionInfo> {
+  private async createAndStoreSession(userId: string, toolkits?: string[]): Promise<SessionInfo> {
     // Create session via Composio service
     const session = await this.composioService.createSession(userId, {
+      toolkits: { enabled: toolkits ?? this.composioService.getSupportedToolkitSlugs() },
       manageConnections: {
-        enable: true,
+        enable: false,
       },
     });
 
@@ -204,6 +240,7 @@ export class ComposioSessionManager {
       .set({
         composioSessionId: session.sessionId,
         composioMcpUrl: session.mcp.url,
+        composioMcpHeaders: session.mcp.headers,
       } as Partial<UserRow>)
       .where(eq(users.id, userId));
 

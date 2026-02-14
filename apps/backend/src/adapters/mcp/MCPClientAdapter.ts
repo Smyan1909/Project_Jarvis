@@ -373,10 +373,17 @@ export class MCPClientAdapter implements MCPClientPort {
   }
 
   private async getBaseHeaders(): Promise<Record<string, string>> {
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'User-Agent': 'project-jarvis/1.0.0',
     };
+
+    // Add custom headers from config if available
+    if (this.config.headers) {
+      Object.assign(headers, this.config.headers);
+    }
+
+    return headers;
   }
 
   private convertSDKTool(tool: Tool): MCPTool {

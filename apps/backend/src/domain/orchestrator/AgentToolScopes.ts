@@ -31,6 +31,11 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     'calculate',
     // Basic web access
     'web_search',
+    // Composio tools
+    'composio__COMPOSIO_SEARCH_TOOLS',
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',
+    'composio__COMPOSIO_REMOTE_WORKBENCH',
+    'composio__COMPOSIO_REMOTE_BASH_TOOL',
   ],
 
   // Research agent - information gathering and analysis
@@ -46,7 +51,13 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     'summarize',
     'extract_entities',
     'compare_sources',
+    // Composio tools
+    'composio__COMPOSIO_SEARCH_TOOLS',
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',
+    'composio__COMPOSIO_REMOTE_WORKBENCH',
+    'composio__COMPOSIO_REMOTE_BASH_TOOL',
   ],
+
 
   // Coding agent - programming and file operations
   // This agent has extensive tool access for end-to-end software development
@@ -108,8 +119,8 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     // Meta-tools for dynamic tool discovery and execution via Composio Tool Router
     // These require MCP_SERVER_<N>_NAME=composio in environment variables
     'composio__COMPOSIO_SEARCH_TOOLS',        // Search for available tools/integrations
-    'composio__COMPOSIO_MANAGE_CONNECTIONS',  // Initiate OAuth connections for apps
     'composio__COMPOSIO_MULTI_EXECUTE_TOOL',  // Execute discovered tools
+
     'composio__COMPOSIO_REMOTE_WORKBENCH',    // Remote workbench for complex tasks
     'composio__COMPOSIO_REMOTE_BASH_TOOL',    // Remote bash execution
     
@@ -137,7 +148,7 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     // Time utilities
     'get_current_time',
     'calculate',
-    // Calendar operations
+    // Legacy Calendar operations
     'calendar_list',
     'calendar_get',
     'calendar_create',
@@ -148,6 +159,11 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     'reminder_create',
     'reminder_update',
     'reminder_delete',
+    // Composio integration tools for external calendars (Outlook, Gmail, Google Calendar)
+    'composio__COMPOSIO_SEARCH_TOOLS',
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',
+    'composio__COMPOSIO_REMOTE_WORKBENCH',
+    'composio__COMPOSIO_REMOTE_BASH_TOOL',
   ],
 
   // Productivity agent - tasks, notes, and documents
@@ -173,6 +189,11 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     // Document operations
     'document_create',
     'document_update',
+    // Composio tools
+    'composio__COMPOSIO_SEARCH_TOOLS',
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',
+    'composio__COMPOSIO_REMOTE_WORKBENCH',
+    'composio__COMPOSIO_REMOTE_BASH_TOOL',
   ],
 
   // Messaging agent - communication
@@ -192,7 +213,13 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     // Contact operations
     'contact_search',
     'contact_get',
+    // Composio tools
+    'composio__COMPOSIO_SEARCH_TOOLS',
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',
+    'composio__COMPOSIO_REMOTE_WORKBENCH',
+    'composio__COMPOSIO_REMOTE_BASH_TOOL',
   ],
+
 };
 
 // =============================================================================
@@ -209,6 +236,7 @@ export const AGENT_CAPABILITIES: Record<AgentType, string> = {
 - Performing calculations
 - Getting current time
 - Basic web searches
+- Using Composio toolkits when needed
 Use this versatility to handle tasks that don't fit other specialized agents.`,
 
   research: `You are a research specialist capable of:
@@ -217,6 +245,7 @@ Use this versatility to handle tasks that don't fit other specialized agents.`,
 - Summarizing content
 - Extracting entities and facts
 - Comparing multiple sources
+- Using Composio toolkits when needed
 Focus on gathering accurate, comprehensive information.`,
 
   coding: `You are an autonomous end-to-end coding agent capable of:
@@ -226,8 +255,9 @@ Focus on gathering accurate, comprehensive information.`,
 - Browser automation via Playwright (navigation, interaction, inspection)
 - Composio Tool Router integration for 100+ external services (GitHub, Slack, Jira, etc.)
   - Use COMPOSIO_SEARCH_TOOLS to discover available integrations
-  - Use COMPOSIO_MANAGE_CONNECTIONS to set up OAuth for apps
   - Use COMPOSIO_MULTI_EXECUTE_TOOL to execute discovered tools
+  - If an integration is not connected, ask the user to connect it in Settings → Connections
+
 - Complex multi-file refactoring and code generation
 You operate with high autonomy - complete tasks independently and verify with tests.`,
 
@@ -236,6 +266,7 @@ You operate with high autonomy - complete tasks independently and verify with te
 - Creating and updating appointments
 - Setting reminders
 - Time calculations
+- Using Composio toolkits for external calendars
 Focus on efficient time management and avoiding conflicts.`,
 
   productivity: `You are a productivity specialist capable of:
@@ -243,6 +274,7 @@ Focus on efficient time management and avoiding conflicts.`,
 - Creating and organizing notes
 - Working with documents
 - Tracking task completion
+- Using Composio toolkits when needed
 Focus on helping the user stay organized and productive.`,
 
   messaging: `You are a messaging specialist capable of:
@@ -250,7 +282,9 @@ Focus on helping the user stay organized and productive.`,
 - Sending SMS messages
 - Managing notifications
 - Looking up contacts
+- Using Composio toolkits for external messaging/email
 Focus on clear, professional communication.`,
+
 };
 
 // =============================================================================

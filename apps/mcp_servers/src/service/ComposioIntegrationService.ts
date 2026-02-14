@@ -52,17 +52,18 @@ export class ComposioIntegrationService {
     options?: CreateSessionOptions
   ): Promise<SessionInfo> {
     // Build toolkits config based on options
-    // If no toolkits specified, don't restrict - let agent discover dynamically
+    // Default to the supported toolkit list to avoid exposing unsupported tools
     const toolkitsConfig = options?.toolkits?.enabled
       ? { enable: options.toolkits.enabled }
       : options?.toolkits?.disabled
         ? { disable: options.toolkits.disabled }
-        : undefined; // No restriction - agent uses COMPOSIO_SEARCH_TOOLS to discover
+        : { enable: ENABLED_TOOLKIT_SLUGS };
+
 
     const session = await this.client.create(userId, {
       toolkits: toolkitsConfig,
       manageConnections: {
-        enable: options?.manageConnections?.enable ?? true,
+        enable: options?.manageConnections?.enable ?? false,
         callbackUrl:
           options?.manageConnections?.callbackUrl ?? this.defaultCallbackUrl,
         waitForConnections:
@@ -81,11 +82,11 @@ export class ComposioIntegrationService {
     const sessionAny = session as unknown as Record<string, unknown>;
     const metaTools = (sessionAny.toolRouterTools as string[] | undefined) ?? [
       'COMPOSIO_SEARCH_TOOLS',
-      'COMPOSIO_MANAGE_CONNECTIONS',
       'COMPOSIO_MULTI_EXECUTE_TOOL',
       'COMPOSIO_REMOTE_WORKBENCH',
       'COMPOSIO_REMOTE_BASH_TOOL',
     ];
+
 
     return {
       sessionId: session.sessionId,
@@ -115,11 +116,11 @@ export class ComposioIntegrationService {
       },
       metaTools: (sessionAny.toolRouterTools as string[] | undefined) ?? [
         'COMPOSIO_SEARCH_TOOLS',
-        'COMPOSIO_MANAGE_CONNECTIONS',
         'COMPOSIO_MULTI_EXECUTE_TOOL',
         'COMPOSIO_REMOTE_WORKBENCH',
         'COMPOSIO_REMOTE_BASH_TOOL',
       ],
+
     };
   }
 
@@ -427,6 +428,21 @@ export class ComposioIntegrationService {
    */
   getToolkitInfo(keyOrSlug: string) {
     return getToolkitInfo(keyOrSlug);
+  }
+
+  /**
+   * List active connection slugs for a user.
+   * Useful for scoping sessions to authenticated toolkits.
+   */
+  async listActiveConnections(userId: string): Promise<string[]> {
+    const accounts = await this.client.connectedAccounts.list({
+      userIds: [userId],
+    });
+
+    return (accounts.items ?? [])
+      .filter((account) => account.status === 'ACTIVE')
+      .map((account) => account.toolkit?.slug ?? '')
+      .filter((slug) => slug !== '');
   }
 
   // ===========================================================================

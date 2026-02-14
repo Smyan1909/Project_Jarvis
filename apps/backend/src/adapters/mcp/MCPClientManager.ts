@@ -173,8 +173,10 @@ export class MCPClientManager implements MCPClientManagerPort {
    * Get all tools converted to ToolDefinition format
    *
    * This is the main method used by the CompositeToolInvoker
+   * 
+   * @param userId - Optional user ID to fetch per-user Composio tools
    */
-  async getToolDefinitions(): Promise<ToolDefinition[]> {
+  async getToolDefinitions(userId?: string): Promise<ToolDefinition[]> {
     const allDefinitions: ToolDefinition[] = [];
 
     for (const client of this.clients.values()) {
@@ -195,6 +197,33 @@ export class MCPClientManager implements MCPClientManagerPort {
           error: error instanceof Error ? error.message : String(error),
         });
         // Graceful degradation
+      }
+    }
+
+    // Add Composio meta-tools if session manager is configured
+    if (this.composioSessionManager && userId) {
+      try {
+        const session = await this.composioSessionManager.getOrCreateSession(userId);
+        
+        // Load the live meta-tool schemas from Composio MCP to avoid schema drift
+        const composioClient = await this.getOrCreateComposioClient(userId);
+        const composioTools = await composioClient.listTools();
+        const normalizedName = normalizeServerName(COMPOSIO_SERVER_NAME);
+        const definitions = convertMCPToolsToDefinitions(composioTools, normalizedName);
+
+        const allowedToolkits = this.composioSessionManager.getSupportedToolkitSlugs();
+        if (allowedToolkits.length > 0) {
+          for (const tool of definitions) {
+            if (tool.id === 'composio__COMPOSIO_SEARCH_TOOLS') {
+              tool.description = `${tool.description ?? ''} Allowed toolkits: ${allowedToolkits.join(', ')}.`.trim();
+            }
+          }
+        }
+
+        allDefinitions.push(...definitions);
+        log.debug('Added Composio meta-tools to tool definitions', { userId, count: definitions.length });
+      } catch (error) {
+        log.warn('Failed to initialize Composio session for tools, skipping meta-tools', { userId, error });
       }
     }
 
@@ -277,7 +306,11 @@ export class MCPClientManager implements MCPClientManagerPort {
       const result = await this.invokeTool(userId, toolId, processedArgs);
       return convertMCPToolResult(result);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      let errorMessage = error instanceof Error ? error.message : String(error);
+      const composioGuidance = this.getComposioAuthGuidance(toolId, args, errorMessage);
+      if (composioGuidance) {
+        errorMessage = composioGuidance;
+      }
       log.error('MCP tool invocation failed', { userId, toolId, error: errorMessage });
       return {
         success: false,
@@ -332,6 +365,66 @@ export class MCPClientManager implements MCPClientManagerPort {
     }
     
     return processed;
+  }
+
+  private getComposioAuthGuidance(
+    toolId: string,
+    args: Record<string, unknown>,
+    errorMessage: string
+  ): string | null {
+    if (!toolId.includes('COMPOSIO')) {
+      return null;
+    }
+
+    if (!this.isComposioAuthError(errorMessage)) {
+      return null;
+    }
+
+    const toolkitSlugs = this.extractComposioToolkitSlugs(toolId, args);
+    const toolkitList = toolkitSlugs.length > 0 ? ` for ${toolkitSlugs.join(', ')}` : '';
+    const verb = toolkitSlugs.length > 1 ? 'are' : 'is';
+
+    return `This integration ${verb} not connected${toolkitList}. Ask the user to open Settings → Connections and connect it.`;
+  }
+
+  private isComposioAuthError(errorMessage: string): boolean {
+    const normalized = errorMessage.toLowerCase();
+    return [
+      'not connected',
+      'connect',
+      'authorization',
+      'authorize',
+      'oauth',
+      'auth',
+      'connected account',
+      'no account',
+      'missing credentials',
+      'needs authentication',
+    ].some((phrase) => normalized.includes(phrase));
+  }
+
+  private extractComposioToolkitSlugs(
+    toolId: string,
+    args: Record<string, unknown>
+  ): string[] {
+    const slugs = new Set<string>();
+
+    if (toolId.includes('COMPOSIO_MULTI_EXECUTE_TOOL') && Array.isArray(args.tools)) {
+      for (const toolItem of args.tools) {
+        if (!toolItem || typeof toolItem !== 'object') {
+          continue;
+        }
+        const toolSlug = (toolItem as Record<string, unknown>).tool_slug;
+        if (typeof toolSlug === 'string') {
+          const [prefix] = toolSlug.split('_');
+          if (prefix) {
+            slugs.add(prefix.toUpperCase());
+          }
+        }
+      }
+    }
+
+    return Array.from(slugs);
   }
 
   async refreshConfigurations(): Promise<void> {
@@ -499,9 +592,10 @@ export class MCPClientManager implements MCPClientManagerPort {
       name: COMPOSIO_SERVER_NAME,
       description: `Per-user Composio session for ${userId}`,
       url: session.mcp.url,
+      headers: session.mcp.headers,
       transport: 'streamable-http',
       enabled: true,
-      authType: 'none', // Auth is handled by the session URL
+      authType: 'none', // Auth is handled by the session headers
       authConfig: { type: 'none' },
       connectionTimeoutMs: 30000,
       requestTimeoutMs: 120000,

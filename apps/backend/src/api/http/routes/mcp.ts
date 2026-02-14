@@ -343,12 +343,13 @@ export function createMCPToolsRoutes(deps: MCPRouteDependencies) {
   // GET /api/v1/mcp/tools - List all available MCP tools
   // -------------------------------------------------------------------------
   app.get('/tools', async (c) => {
+    const userId = c.req.query('userId');
     if (!mcpClientManager) {
       return c.json({ error: 'MCP client manager not available', tools: [] });
     }
 
     try {
-      const tools = await mcpClientManager.getToolDefinitions();
+      const tools = await mcpClientManager.getToolDefinitions(userId);
       return c.json({ tools, count: tools.length });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

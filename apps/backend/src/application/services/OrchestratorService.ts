@@ -31,6 +31,7 @@ import { SubAgentManager, type AgentHandle } from './SubAgentManager.js';
 import { LoopDetectionService } from './LoopDetectionService.js';
 import type { ContextManagementService } from './ContextManagementService.js';
 import type { ConversationHistoryService } from './ConversationHistoryService.js';
+import type { ComposioSessionManager } from './ComposioSessionManager.js';
 import {
   ORCHESTRATOR_TOOLS,
   ORCHESTRATOR_ONLY_TOOL_IDS,
@@ -118,6 +119,7 @@ export class OrchestratorService {
     private contextManager?: ContextManagementService,
     private conversationHistory?: ConversationHistoryService,
     private agentRunRepository?: AgentRunRepository,
+    private composioSessionManager?: ComposioSessionManager,
     config: OrchestratorConfig = {}
   ) {
     this.maxIterations = config.maxIterations ?? 50;
@@ -197,10 +199,32 @@ export class OrchestratorService {
       // Retrieve relevant memories for context
       log.debug('Searching memories');
       const memories = await this.memoryStore.search(userId, input, 5);
-      const memoryContext = memories.length > 0
+      let memoryContext = memories.length > 0
         ? `\n\nRelevant context from memory:\n${memories.map(m => `- ${m.content}`).join('\n')}`
         : '';
       log.debug('Memories retrieved', { count: memories.length });
+
+      // Add Composio connection context if available
+      let integrationContext = '';
+      if (this.composioSessionManager) {
+        const supportedIntegrations = this.composioSessionManager.getSupportedIntegrations();
+        if (supportedIntegrations.length > 0) {
+          integrationContext += `Supported Integrations: ${supportedIntegrations.join(', ')}. Only use these external services. If a required integration is not connected, instruct the user to open Settings → Connections and connect it. Do not initiate authentication inside the chat.`;
+        }
+
+        try {
+          const activeIntegrations = await this.composioSessionManager.getActiveIntegrations(userId);
+          const activeCount = activeIntegrations.length;
+          const activeList = activeCount > 0 ? activeIntegrations.join(', ') : '[]';
+          const activeLine = `ConnectedIntegrationsCount: ${activeCount}. ConnectedIntegrations: ${activeList}. If ConnectedIntegrationsCount is 0, guide the user to Settings → Connections. If it is greater than 0, do NOT say there are no connected integrations.`;
+          integrationContext = integrationContext.length > 0
+            ? `${integrationContext}\n${activeLine}`
+            : activeLine;
+          log.debug('Added active integrations to context', { count: activeIntegrations.length });
+        } catch (error) {
+          log.warn('Failed to fetch active integrations for context', { error });
+        }
+      }
 
       // Get all available tools (orchestrator + standard)
       log.debug('Getting orchestrator tools');
@@ -218,10 +242,12 @@ export class OrchestratorService {
         runId,
         input,
         memoryContext,
+        integrationContext,
         historyMessages,
         allTools,
         state
       );
+
 
       // Persist messages and maybe summarize (if enabled)
       if (this.conversationHistory && result.allMessages) {
@@ -353,6 +379,7 @@ export class OrchestratorService {
     runId: string,
     input: string,
     memoryContext: string,
+    integrationContext: string,
     historyMessages: LLMMessage[],
     tools: ToolDefinition[],
     state: OrchestratorState
@@ -362,8 +389,10 @@ export class OrchestratorService {
     // Start with conversation history, then add current user input
     const messages: LLMMessage[] = [
       ...historyMessages,
-      { role: 'user', content: input + memoryContext },
+      ...(integrationContext ? [{ role: 'system' as const, content: integrationContext }] : []),
+      { role: 'user' as const, content: input + memoryContext },
     ];
+
     
     // Track which messages are new in this run (for persistence)
     const newMessagesStartIndex = historyMessages.length;

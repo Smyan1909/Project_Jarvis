@@ -153,18 +153,20 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
             pendingConnectionId: null,
             pendingAppKey: null,
           }));
+          
+          // Refresh the backend Composio session to pick up the new connection
+          try {
+            console.log('[OAuth] Refreshing backend Composio session...');
+            await composioApi.refreshSession(userId);
+            console.log('[OAuth] Backend session refreshed successfully');
+          } catch (error) {
+            console.error('[OAuth] Failed to refresh backend session:', error);
+            // Continue anyway - the session will be refreshed lazily on next use
+          }
+          
           // Refresh apps to get updated status
           await fetchApps();
           console.log('[OAuth] Apps refreshed after successful connection');
-        } else if (status.status === 'failed' || status.status === 'expired') {
-          // Connection failed
-          stopPolling();
-          setState((prev) => ({
-            ...prev,
-            pendingConnectionId: null,
-            pendingAppKey: null,
-            error: status.error || `Failed to connect to ${appKey}`,
-          }));
         }
         // If still 'initiated', continue polling
       } catch (error: any) {
@@ -172,7 +174,7 @@ export function useIntegrations({ userId, callbackUrl }: UseIntegrationsOptions)
         console.error('Error polling connection status:', error);
       }
     },
-    [fetchApps, stopPolling]
+    [fetchApps, stopPolling, userId]
   );
 
   // Start polling for connection status

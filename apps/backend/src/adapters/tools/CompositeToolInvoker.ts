@@ -68,7 +68,7 @@ export class CompositeToolInvoker implements ToolInvokerPort {
     // Get MCP tools
     if (this.mcpManager) {
       try {
-        const mcpTools = await this.mcpManager.getToolDefinitions();
+        const mcpTools = await this.mcpManager.getToolDefinitions(userId);
         tools.push(...mcpTools);
         this.log.debug('Retrieved MCP tools', { count: mcpTools.length });
       } catch (error) {

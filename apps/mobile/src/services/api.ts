@@ -463,6 +463,16 @@ export const composioApi = {
     const response = await api.post(`/v1/composio/accounts/${accountId}/refresh`);
     return response.data;
   },
+
+  // Refresh Composio session after successful OAuth connection
+  // This clears the backend cache so new connections are picked up
+  refreshSession: async (userId: string): Promise<{ success: boolean; sessionId: string }> => {
+    const response = await api.post<{ success: boolean; sessionId: string }>(
+      `/v1/composio/refresh-session`,
+      { userId }
+    );
+    return response.data;
+  },
 };
 
 // =============================================================================
