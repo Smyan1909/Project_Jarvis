@@ -1,0 +1,48 @@
+{
+  "id": "research-deep-dive",
+  "displayName": "Research Deep Dive",
+  "description": "Demonstrates comprehensive web research workflow with analysis and summarization",
+  "visibility": {
+    "showBanner": true,
+    "bannerMessage": "🔍 Running example prompt: Research Deep Dive - This demonstrates web research and analysis"
+  },
+  "execution": {
+    "hideContextHistory": true,
+    "workingDirectory": "/tmp/exprompt_playground",
+    "plan": {
+      "reasoning": "This example demonstrates a comprehensive research workflow. We'll search for information on a topic, fetch and analyze multiple sources, extract key entities and facts, compare different perspectives, and produce a well-structured summary with citations.",
+      "tasks": [
+        {
+          "tempId": "task_1",
+          "description": "Search the web for the latest information about modern React state management solutions (Redux, Zustand, Jotai, Context API). Save all research findings and documents to /tmp/exprompt_playground.",
+          "agentType": "research",
+          "dependencies": []
+        },
+        {
+          "tempId": "task_2",
+          "description": "Fetch and analyze the top 5 search results, extracting key features, pros, cons, and use cases for each state management solution. Save analysis to /tmp/exprompt_playground.",
+          "agentType": "research",
+          "dependencies": ["task_1"]
+        },
+        {
+          "tempId": "task_3",
+          "description": "Extract named entities (libraries, companies, developers) and key technical concepts from the analyzed sources. Save extracted data to /tmp/exprompt_playground.",
+          "agentType": "research",
+          "dependencies": ["task_2"]
+        },
+        {
+          "tempId": "task_4",
+          "description": "Compare the different state management solutions across criteria: bundle size, learning curve, performance, ecosystem, and when to use each. Save comparison to /tmp/exprompt_playground.",
+          "agentType": "research",
+          "dependencies": ["task_2"]
+        },
+        {
+          "tempId": "task_5",
+          "description": "Create a comprehensive summary document with executive overview, detailed comparison table, recommendations for different scenarios, and properly cited sources. Save the final document to /tmp/exprompt_playground.",
+          "agentType": "research",
+          "dependencies": ["task_3", "task_4"]
+        }
+      ]
+    }
+  }
+}

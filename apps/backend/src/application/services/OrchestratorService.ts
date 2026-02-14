@@ -38,6 +38,14 @@ import {
 import { ORCHESTRATOR_SYSTEM_PROMPT } from '../../domain/orchestrator/prompts.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 import { createTracer, SpanKind, SpanStatusCode } from '../../infrastructure/observability/index.js';
+import {
+  detectExamplePrompt,
+  createExamplePromptStartEvent,
+  ensureWorkspace,
+  cleanWorkspace,
+  postRunCleanup,
+} from '../../domain/orchestrator/example-prompts/index.js';
+import type { ExamplePromptMatch } from '../../domain/orchestrator/example-prompts/types.js';
 
 // =============================================================================
 // Tracing
@@ -78,6 +86,10 @@ export interface OrchestratorConfig {
   enableDirectExecution?: boolean;
   /** Callback for streaming events to client */
   onEvent?: (event: StreamEvent) => void;
+  /** Whether example prompts feature is enabled */
+  enableExamplePrompts?: boolean;
+  /** Base path for example prompt JSON files */
+  examplePromptsPath?: string;
 }
 
 // =============================================================================
@@ -105,6 +117,8 @@ export class OrchestratorService {
   private maxIterations: number;
   private enableDirectExecution: boolean;
   private onEvent: ((event: StreamEvent) => void) | null;
+  private enableExamplePrompts: boolean;
+  private examplePromptsPath: string;
 
   constructor(
     private llm: LLMProviderPort,
@@ -123,6 +137,8 @@ export class OrchestratorService {
     this.maxIterations = config.maxIterations ?? 50;
     this.enableDirectExecution = config.enableDirectExecution ?? true;
     this.onEvent = config.onEvent ?? null;
+    this.enableExamplePrompts = config.enableExamplePrompts ?? false;
+    this.examplePromptsPath = config.examplePromptsPath ?? './src/domain/orchestrator/example-prompts';
   }
 
   // ===========================================================================
@@ -168,6 +184,30 @@ export class OrchestratorService {
     const state = await this.repository.createOrchestratorState(runId, userId);
     await this.cache.setOrchestratorState(state);
     log.debug('State initialized');
+
+    // Check for example prompt (early detection before loading context)
+    const exampleMatch = detectExamplePrompt(input, {
+      enabled: this.enableExamplePrompts,
+      basePath: this.examplePromptsPath,
+    });
+
+    if (exampleMatch) {
+      log.info('Example prompt detected', {
+        codeword: exampleMatch.codeword,
+        promptId: exampleMatch.prompt.id,
+      });
+
+      // Emit banner message for visibility
+      const startEvent = createExamplePromptStartEvent(exampleMatch);
+      await this.emitEvent({
+        type: 'orchestrator.status',
+        status: 'executing',
+        message: startEvent.bannerMessage,
+      });
+
+      // Execute the example prompt directly
+      return this.executeExamplePrompt(exampleMatch, userId, runId, dbRunId, span);
+    }
 
     try {
       // Start session for context continuity
@@ -342,6 +382,310 @@ export class OrchestratorService {
     }
       }
     );
+  }
+
+  // ===========================================================================
+  // Example Prompt Execution
+  // ===========================================================================
+
+  /**
+   * Execute a predefined example prompt directly without LLM decision loop.
+   * This skips context history loading and executes the exact plan defined in JSON.
+   */
+  private async executeExamplePrompt(
+    match: ExamplePromptMatch,
+    userId: string,
+    runId: string,
+    dbRunId: string | null,
+    span: any
+  ): Promise<OrchestratorRunResult> {
+    const log = logger.child({ 
+      runId, 
+      userId, 
+      service: 'OrchestratorService',
+      examplePromptId: match.prompt.id,
+      codeword: match.codeword,
+    });
+    
+    log.info('Starting example prompt execution');
+
+    // Track active agent handles
+    const activeAgents = new Map<string, AgentHandle>();
+    let totalTokens = 0;
+    let totalCost = 0;
+    let tasksCompleted = 0;
+    let tasksFailed = 0;
+
+    // Get working directory from example prompt
+    const workingDirectory = match.prompt.execution.workingDirectory;
+    if (!workingDirectory) {
+      throw new Error('Example prompt missing required workingDirectory field');
+    }
+
+    // Setup workspace before execution
+    log.info('Setting up workspace', { workingDirectory });
+    ensureWorkspace(workingDirectory);
+    cleanWorkspace(workingDirectory);
+
+    try {
+      // Start session (but don't load context history)
+      await this.startSession(userId, runId);
+
+      // Set status to executing
+      await this.repository.updateOrchestratorStatus(runId, 'executing');
+      await this.emitEvent({
+        type: 'orchestrator.status',
+        status: 'executing',
+        message: `Creating plan: ${match.prompt.displayName}`,
+      });
+
+      // Create the predefined plan directly
+      const planResult = await this.handleCreatePlan(runId, {
+        reasoning: match.prompt.execution.plan.reasoning,
+        tasks: match.prompt.execution.plan.tasks,
+      });
+
+      if (!planResult.success || !planResult.planId) {
+        throw new Error(`Failed to create plan: ${planResult.error}`);
+      }
+
+      const planId = planResult.planId;
+      log.info('Example prompt plan created', { planId });
+
+      // Run the plan execution loop (without LLM decision-making)
+      const startTime = Date.now();
+      const maxDuration = 10 * 60 * 1000; // 10 minute timeout for example prompts
+
+      while (Date.now() - startTime < maxDuration) {
+        // Check for completed agents
+        await this.checkCompletedAgents(runId, activeAgents);
+
+        // Get current plan from repository
+        const plan = await this.planService.getPlanByRunId(runId);
+        if (!plan) {
+          throw new Error('Failed to get plan');
+        }
+
+        // Log current plan state for debugging
+        const pendingTasks = plan.nodes.filter((t) => t.status === 'pending');
+        const inProgressTasks = plan.nodes.filter((t) => t.status === 'in_progress');
+        const completedTasks = plan.nodes.filter((t) => t.status === 'completed');
+        const failedTasks = plan.nodes.filter((t) => t.status === 'failed' || t.status === 'cancelled');
+        
+        log.debug('Plan status check', {
+          totalTasks: plan.nodes.length,
+          pending: pendingTasks.length,
+          inProgress: inProgressTasks.length,
+          completed: completedTasks.length,
+          failed: failedTasks.length,
+          activeAgents: activeAgents.size,
+        });
+
+        // Check if all tasks are done
+        const allDone = plan.nodes.every((t) => 
+          t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'
+        );
+
+        if (allDone) {
+          tasksCompleted = completedTasks.length;
+          tasksFailed = failedTasks.length;
+          log.info('All tasks completed', { tasksCompleted, tasksFailed });
+          break;
+        }
+
+        // Start agents for ready tasks (pending with all dependencies completed)
+        const readyTasks = plan.nodes.filter((t) => {
+          if (t.status !== 'pending') return false;
+          
+          // Check if all dependencies are completed
+          const depsCompleted = t.dependencies.every((depId: string) => {
+            const depTask = plan.nodes.find((task) => task.id === depId);
+            const isCompleted = depTask && depTask.status === 'completed';
+            if (!isCompleted) {
+              log.debug('Dependency not completed', { 
+                taskId: t.id, 
+                depId, 
+                depStatus: depTask?.status 
+              });
+            }
+            return isCompleted;
+          });
+          
+          return depsCompleted;
+        });
+
+        log.debug('Ready tasks check', { 
+          readyCount: readyTasks.length,
+          readyTaskIds: readyTasks.map(t => t.id),
+        });
+
+        for (const task of readyTasks) {
+          // Check if this task already has an active agent
+          const hasActiveAgent = Array.from(activeAgents.values()).some(
+            handle => handle.getState().taskNodeId === task.id
+          );
+          
+          if (!hasActiveAgent) {
+            log.info('Starting agent for ready task', { 
+              taskId: task.id, 
+              agentType: task.agentType,
+              description: task.description.substring(0, 50),
+            });
+            
+            await this.handleStartAgent(userId, runId, {
+              taskId: task.id,
+            }, activeAgents);
+          } else {
+            log.debug('Task already has active agent', { taskId: task.id });
+          }
+        }
+
+        // Wait a bit before checking again
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // Check if we timed out
+      if (Date.now() - startTime >= maxDuration) {
+        throw new Error(`Example prompt timed out after ${maxDuration / 1000} seconds`);
+      }
+
+      // Get final plan state
+      const finalPlan = await this.planService.getPlanByRunId(runId);
+      const response = this.buildExamplePromptResponse(match.prompt, finalPlan);
+
+      // Persist messages if conversation history is enabled
+      if (this.conversationHistory) {
+        const messages: LLMMessage[] = [
+          { role: 'user', content: match.codeword },
+          { role: 'assistant', content: response },
+        ];
+        await this.conversationHistory.persistRunMessages(userId, dbRunId, messages);
+      }
+
+      // End session
+      await this.endSession(userId, runId, response);
+
+      // Mark as completed
+      await this.repository.updateOrchestratorStatus(runId, 'completed');
+      await this.emitEvent({
+        type: 'orchestrator.status',
+        status: 'completed',
+      });
+      await this.emitEvent({
+        type: 'agent.final',
+        content: response,
+        usage: { totalTokens, totalCost },
+      });
+
+      log.info('Example prompt completed successfully', {
+        tasksCompleted,
+        tasksFailed,
+      });
+
+      // Clean up workspace after successful completion
+      // This will throw an error if cleanup fails, causing the example prompt to fail
+      postRunCleanup(workingDirectory);
+
+      // Record metrics in span
+      span.setAttributes({
+        'jarvis.success': true,
+        'jarvis.total_tokens': totalTokens,
+        'jarvis.total_cost': totalCost,
+        'jarvis.tasks_completed': tasksCompleted,
+        'jarvis.tasks_failed': tasksFailed,
+        'jarvis.example_prompt_id': match.prompt.id,
+        'jarvis.example_prompt_codeword': match.codeword,
+      });
+      span.end();
+
+      return {
+        success: tasksFailed === 0,
+        response,
+        error: null,
+        totalTokens,
+        totalCost,
+        planId,
+        tasksCompleted,
+        tasksFailed,
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      log.error('Example prompt execution failed', { error: errorMessage });
+
+      // Cancel any running agents
+      await this.agentManager.cancelAllAgents(runId, 'Example prompt error');
+
+      await this.endSession(userId, runId, `Session ended due to error: ${errorMessage}`);
+      await this.repository.updateOrchestratorStatus(runId, 'failed');
+      await this.emitEvent({
+        type: 'orchestrator.status',
+        status: 'failed',
+        message: errorMessage,
+      });
+      await this.emitEvent({
+        type: 'agent.error',
+        message: errorMessage,
+        code: 'EXAMPLE_PROMPT_ERROR',
+      });
+
+      span.recordException(error as Error);
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: errorMessage,
+      });
+      span.end();
+
+      return {
+        success: false,
+        response: null,
+        error: errorMessage,
+        totalTokens,
+        totalCost,
+        planId: null,
+        tasksCompleted,
+        tasksFailed,
+      };
+    }
+  }
+
+  /**
+   * Build a response message for example prompt completion
+   */
+  private buildExamplePromptResponse(
+    prompt: ExamplePromptMatch['prompt'],
+    plan: TaskPlan | null
+  ): string {
+    const completedTasks = plan?.nodes?.filter((t) => t.status === 'completed') || [];
+    const failedTasks = plan?.nodes?.filter((t) => t.status === 'failed' || t.status === 'cancelled') || [];
+
+    let response = `# ${prompt.displayName} - Completed\n\n`;
+    response += `${prompt.description}\n\n`;
+    response += `## Results\n\n`;
+    response += `- **Completed Tasks**: ${completedTasks.length}\n`;
+    response += `- **Failed Tasks**: ${failedTasks.length}\n\n`;
+
+    if (completedTasks.length > 0) {
+      response += `### Completed\n\n`;
+      completedTasks.forEach((task, index) => {
+        response += `${index + 1}. ${task.description}\n`;
+      });
+      response += '\n';
+    }
+
+    if (failedTasks.length > 0) {
+      response += `### Failed\n\n`;
+      failedTasks.forEach((task, index) => {
+        response += `${index + 1}. ${task.description}`;
+        if (task.result && typeof task.result === 'object' && 'error' in task.result) {
+          response += ` - ${(task.result as any).error}`;
+        }
+        response += '\n';
+      });
+      response += '\n';
+    }
+
+    return response;
   }
 
   // ===========================================================================

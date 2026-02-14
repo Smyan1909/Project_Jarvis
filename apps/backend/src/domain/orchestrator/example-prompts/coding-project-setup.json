@@ -1,0 +1,48 @@
+{
+  "id": "coding-project-setup",
+  "displayName": "Coding Project Setup",
+  "description": "Demonstrates setting up a complete TypeScript project with linting, testing, and CI configuration",
+  "visibility": {
+    "showBanner": true,
+    "bannerMessage": "🎯 Running example prompt: Coding Project Setup - This demonstrates a multi-step coding workflow"
+  },
+  "execution": {
+    "hideContextHistory": true,
+    "workingDirectory": "/tmp/exprompt_playground",
+    "plan": {
+      "reasoning": "This example demonstrates setting up a complete TypeScript project with modern tooling. We'll initialize the project, configure linting with ESLint, set up formatting with Prettier, add testing with Vitest, and create a GitHub Actions CI pipeline.",
+      "tasks": [
+        {
+          "tempId": "task_1",
+          "description": "Initialize a new TypeScript project with package.json, tsconfig.json, and basic directory structure in /tmp/exprompt_playground. All file operations and terminal commands must use this directory as the working directory.",
+          "agentType": "coding",
+          "dependencies": []
+        },
+        {
+          "tempId": "task_2",
+          "description": "Configure ESLint with TypeScript support, including recommended rules and custom overrides for the project in /tmp/exprompt_playground. All file operations and terminal commands must use this directory as the working directory.",
+          "agentType": "coding",
+          "dependencies": ["task_1"]
+        },
+        {
+          "tempId": "task_3",
+          "description": "Set up Prettier configuration for consistent code formatting with TypeScript and integration with ESLint in /tmp/exprompt_playground. All file operations and terminal commands must use this directory as the working directory.",
+          "agentType": "coding",
+          "dependencies": ["task_2"]
+        },
+        {
+          "tempId": "task_4",
+          "description": "Install and configure Vitest for unit testing with TypeScript support, including a sample test file in /tmp/exprompt_playground. All file operations and terminal commands must use this directory as the working directory.",
+          "agentType": "coding",
+          "dependencies": ["task_1"]
+        },
+        {
+          "tempId": "task_5",
+          "description": "Create GitHub Actions CI workflow that runs linting, type checking, and tests on pull requests in /tmp/exprompt_playground. All file operations and terminal commands must use this directory as the working directory.",
+          "agentType": "coding",
+          "dependencies": ["task_2", "task_3", "task_4"]
+        }
+      ]
+    }
+  }
+}

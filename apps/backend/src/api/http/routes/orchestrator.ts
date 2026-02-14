@@ -62,6 +62,7 @@ import { db } from '../../../infrastructure/db/client.js';
 // LLM and Tools
 import { llmRouter } from '../../../application/services/LLMRouterService.js';
 import { logger } from '../../../infrastructure/logging/logger.js';
+import { config } from '../../../infrastructure/config/index.js';
 
 // =============================================================================
 // Request Schemas
@@ -319,7 +320,11 @@ export function createOrchestratorService(onEvent: (event: StreamEvent) => void)
     contextManager,
     conversationHistoryService,
     agentRunRepository,
-    { onEvent }
+    {
+      onEvent,
+      enableExamplePrompts: config.ENABLE_EXAMPLE_PROMPTS === 'true',
+      examplePromptsPath: config.EXAMPLE_PROMPTS_PATH,
+    }
   );
 }
 
