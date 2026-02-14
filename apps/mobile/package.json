@@ -20,6 +20,7 @@
     "expo": "^54.0.33",
     "expo-av": "~16.0.8",
     "expo-constants": "~18.0.5",
+    "expo-dev-client": "^6.0.20",
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.21",
     "expo-linking": "~8.0.11",

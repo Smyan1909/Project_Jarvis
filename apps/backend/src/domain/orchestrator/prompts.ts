@@ -293,18 +293,60 @@ Full browser automation for web testing, scraping, and interaction.
 - Wait for navigation to complete before further actions
 - Take screenshots to verify visual state when needed
 
-### 4. GitHub via Composio
-OAuth-authenticated GitHub operations.
+### 4. Composio Tool Router Integration
+OAuth-authenticated access to 100+ external services (GitHub, Slack, Jira, Google, etc.).
 
-**Discovery:**
-Use \`COMPOSIO_SEARCH_TOOLS\` to find available GitHub tools for your task.
+**CRITICAL: Three-Step Workflow for Composio Tools**
 
-**Common operations:**
-- Create and manage issues
-- Create and manage pull requests
-- Fetch repository information
-- Manage branches
-- Review and comment on PRs
+You MUST follow this exact workflow when using Composio tools to avoid argument formatting errors:
+
+**Step 1: Discover Tools**
+Use \`COMPOSIO_SEARCH_TOOLS\` to find available tools for your task:
+\`\`\`json
+{
+  "query": "create github issue"
+}
+\`\`\`
+
+**Step 2: Get Tool Schema (MANDATORY)**
+Use \`COMPOSIO_GET_TOOL_SCHEMAS\` to get the EXACT input schema before execution:
+\`\`\`json
+{
+  "tool_slugs": ["GITHUB_CREATE_ISSUE"]
+}
+\`\`\`
+This returns the complete inputParameters schema showing all required and optional fields with their types and descriptions.
+
+**Step 3: Execute with Correct Schema**
+Use \`COMPOSIO_MULTI_EXECUTE_TOOL\` with arguments that EXACTLY match the schema:
+\`\`\`json
+{
+  "tools": [
+    {
+      "tool_slug": "GITHUB_CREATE_ISSUE",
+      "arguments": {
+        "repo": "owner/repo-name",
+        "title": "Issue title",
+        "body": "Issue description"
+      }
+    }
+  ]
+}
+\`\`\`
+
+**IMPORTANT RULES:**
+- NEVER guess the argument structure - always get the schema first
+- The \`arguments\` field must be a JSON object, NOT a string
+- Use exact field names from the schema (case-sensitive)
+- Required fields must be provided; optional fields can be omitted
+
+**Common Composio Tools:**
+- GitHub: GITHUB_CREATE_ISSUE, GITHUB_CREATE_PR, GITHUB_GET_REPO, GITHUB_LIST_ISSUES
+- Slack: SLACK_SEND_MESSAGE, SLACK_LIST_CHANNELS
+- Google: GOOGLE_CALENDAR_CREATE_EVENT, GOOGLE_DRIVE_LIST_FILES
+
+**Connection Management:**
+If a tool requires OAuth authentication, use \`COMPOSIO_MANAGE_CONNECTIONS\` first to initiate the connection flow.
 
 ## Workflow Guidelines
 
@@ -328,7 +370,7 @@ Use \`COMPOSIO_SEARCH_TOOLS\` to find available GitHub tools for your task.
 | Lint/typecheck | Terminal |
 | Web scraping | Playwright |
 | UI testing | Playwright |
-| GitHub API operations | Composio |
+| GitHub/Slack/Jira API | Composio (3-step workflow: SEARCH -> GET_SCHEMAS -> EXECUTE) |
 | Complex refactoring | Claude Code |
 
 ## Git, Commit & Push Guidelines
