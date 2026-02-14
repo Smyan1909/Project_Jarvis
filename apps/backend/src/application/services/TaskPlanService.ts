@@ -86,6 +86,7 @@ export class TaskPlanService {
 
     // Create task nodes with resolved dependencies
     const nodesToCreate = input.tasks.map(task => ({
+      id: tempIdToRealId.get(task.tempId)!,  // Use pre-generated UUID to maintain dependency links
       description: task.description,
       agentType: task.agentType,
       dependencies: task.dependencies.map(depTempId => {

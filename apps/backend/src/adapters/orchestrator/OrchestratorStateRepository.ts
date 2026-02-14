@@ -107,8 +107,8 @@ export interface IOrchestratorStateRepository {
   updatePlanStatus(planId: string, status: TaskPlanStatus): Promise<void>;
 
   // Task Nodes
-  createTaskNode(planId: string, node: Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'>): Promise<TaskNode>;
-  createTaskNodes(planId: string, nodes: Array<Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'>>): Promise<TaskNode[]>;
+  createTaskNode(planId: string, node: Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'> & { id?: string }): Promise<TaskNode>;
+  createTaskNodes(planId: string, nodes: Array<Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'> & { id?: string }>): Promise<TaskNode[]>;
   getTaskNode(nodeId: string): Promise<TaskNode | null>;
   getTaskNodesByPlan(planId: string): Promise<TaskNode[]>;
   updateTaskNodeStatus(nodeId: string, status: TaskNodeStatus): Promise<void>;
@@ -198,11 +198,11 @@ export class InMemoryOrchestratorStateRepository implements IOrchestratorStateRe
   // Task Nodes
   async createTaskNode(
     planId: string,
-    node: Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'>
+    node: Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'> & { id?: string }
   ): Promise<TaskNode> {
     const taskNode: TaskNode = {
       ...node,
-      id: uuidv4(),
+      id: node.id || uuidv4(),  // Use provided ID or generate new one
       status: 'pending',
       assignedAgentId: null,
       result: null,
@@ -221,7 +221,7 @@ export class InMemoryOrchestratorStateRepository implements IOrchestratorStateRe
 
   async createTaskNodes(
     planId: string,
-    nodes: Array<Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'>>
+    nodes: Array<Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'> & { id?: string }>
   ): Promise<TaskNode[]> {
     const results: TaskNode[] = [];
     for (const node of nodes) {
