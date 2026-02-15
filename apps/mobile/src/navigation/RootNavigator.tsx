@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../features/auth/AuthContext';
 import type { RootStackParamList, AuthStackParamList, MainTabParamList } from './types';
 import { colors } from '../theme';
+import { logger } from '../utils/logger';
 
 // Custom dark navigation theme
 const NavigationTheme = {
@@ -37,6 +38,7 @@ const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const MainTab = createBottomTabNavigator<MainTabParamList>();
 
 function AuthNavigator() {
+  logger.info('Navigation', 'Rendering AuthNavigator');
   return (
     <AuthStack.Navigator
       screenOptions={{
@@ -51,6 +53,7 @@ function AuthNavigator() {
 }
 
 function MainNavigator() {
+  logger.info('Navigation', 'Rendering MainNavigator');
   return (
     <MainTab.Navigator
       screenOptions={({ route }: BottomTabScreenProps<MainTabParamList>) => ({
@@ -82,16 +85,25 @@ function MainNavigator() {
         name="Chat"
         component={ChatScreen}
         options={{ tabBarLabel: 'Chat' }}
+        listeners={{
+          tabPress: () => logger.info('Navigation', 'Tab pressed: Chat'),
+        }}
       />
       <MainTab.Screen
         name="History"
         component={HistoryScreen}
         options={{ tabBarLabel: 'History' }}
+        listeners={{
+          tabPress: () => logger.info('Navigation', 'Tab pressed: History'),
+        }}
       />
       <MainTab.Screen
         name="Settings"
         component={SettingsScreen}
         options={{ tabBarLabel: 'Settings' }}
+        listeners={{
+          tabPress: () => logger.info('Navigation', 'Tab pressed: Settings'),
+        }}
       />
     </MainTab.Navigator>
   );
@@ -99,9 +111,10 @@ function MainNavigator() {
 
 export function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
+  logger.info('Navigation', `RootNavigator rendering`, { isAuthenticated, isLoading });
 
   if (isLoading) {
-    // Show loading screen while restoring auth state
+    logger.info('Navigation', 'Showing loading screen');
     return <LoadingScreen />;
   }
 
@@ -125,6 +138,9 @@ export function RootNavigator() {
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
               }}
+              listeners={{
+                focus: () => logger.info('Navigation', 'Screen focused: Conversation'),
+              }}
             />
             <RootStack.Screen
               name="SecretManagement"
@@ -135,6 +151,9 @@ export function RootNavigator() {
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
               }}
+              listeners={{
+                focus: () => logger.info('Navigation', 'Screen focused: SecretManagement'),
+              }}
             />
             <RootStack.Screen
               name="Integrations"
@@ -144,6 +163,9 @@ export function RootNavigator() {
                 title: 'Integrations',
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
+              }}
+              listeners={{
+                focus: () => logger.info('Navigation', 'Screen focused: Integrations'),
               }}
             />
           </>

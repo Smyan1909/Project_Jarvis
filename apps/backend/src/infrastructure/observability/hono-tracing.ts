@@ -38,7 +38,7 @@ const headerGetter = {
     return carrier.get(key) ?? undefined;
   },
   keys(carrier: Headers): string[] {
-    return [...carrier.keys()];
+    return [...(carrier as any).keys()];
   },
 };
 
@@ -48,23 +48,23 @@ const headerGetter = {
 
 /**
  * Tracing middleware for Hono
- * 
+ *
  * Creates a span for each incoming HTTP request with:
  * - Standard HTTP semantic conventions
  * - Request/response attributes
  * - Error recording
  * - Trace ID in response headers
- * 
+ *
  * @example
  * ```typescript
  * import { tracingMiddleware } from './infrastructure/observability/hono-tracing.js';
- * 
+ *
  * app.use('*', tracingMiddleware);
  * ```
  */
 export const tracingMiddleware: MiddlewareHandler = async (c, next) => {
   const tracer = getTracer();
-  
+
   // Extract parent context from incoming headers (W3C Trace Context)
   const parentContext = propagation.extract(
     context.active(),
@@ -96,7 +96,7 @@ export const tracingMiddleware: MiddlewareHandler = async (c, next) => {
           'http.host': url.host,
           'http.user_agent': c.req.header('user-agent') || '',
           'http.request_content_length': c.req.header('content-length') || '',
-          
+
           // Custom attributes
           'http.request_id': c.req.header('x-request-id') || '',
         },

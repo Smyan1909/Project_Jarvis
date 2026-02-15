@@ -47,6 +47,9 @@ node_modules/
 apps/mobile/android/
 apps/mobile/ios/
 
+android/
+ios/
+
 # IDE
 .vscode/
 .idea/

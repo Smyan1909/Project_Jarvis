@@ -1,5 +1,8 @@
 {
   "android": {
     "package": "com.anonymous.projectjarvis"
+  },
+  "ios": {
+    "bundleIdentifier": "com.anonymous.projectjarvis"
   }
 }

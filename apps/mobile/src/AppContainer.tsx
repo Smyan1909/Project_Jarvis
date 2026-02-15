@@ -7,13 +7,22 @@ import { TaskObservabilityProvider } from './features/observability/TaskObservab
 import { RootNavigator } from './navigation/RootNavigator';
 import { colors } from './theme';
 import { setupPushNotificationListeners } from './services/pushNotifications';
+import { logger } from './utils/logger';
 
 export default function AppContainer() {
+  logger.info('App', 'AppContainer initializing');
+  
   // Setup push notification listeners on mount
   useEffect(() => {
+    logger.info('App', 'Setting up push notification listeners');
     const cleanup = setupPushNotificationListeners();
-    return cleanup;
+    return () => {
+      logger.info('App', 'Cleaning up push notification listeners');
+      cleanup();
+    };
   }, []);
+  
+  logger.info('App', 'Rendering app with providers');
 
   return (
     <GestureHandlerRootView style={styles.container}>

@@ -7,6 +7,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getSpeechToTextService, ISpeechToTextService, getCurrentProvider } from '../services/speech';
+import { logger } from '../utils/logger';
 
 export interface UseSpeechToTextReturn {
   /** Whether the service is currently listening */
@@ -38,7 +39,7 @@ export function useSpeechToText(): UseSpeechToTextReturn {
 
   // Initialize service and set up callbacks
   useEffect(() => {
-    console.log('[useSpeechToText] Initializing speech service');
+    logger.info('STT', 'Initializing speech-to-text service');
     const service = getSpeechToTextService();
     serviceRef.current = service;
 
@@ -49,41 +50,41 @@ export function useSpeechToText(): UseSpeechToTextReturn {
 
     // Check availability
     service.isAvailable().then((available) => {
-      console.log('[useSpeechToText] Service available:', available);
+      logger.info('STT', `Service available: ${available}`);
       setIsAvailable(available);
     });
 
     // Set up callbacks
-    console.log('[useSpeechToText] Registering callbacks');
+    logger.debug('STT', 'Registering callbacks');
     service.onPartialResult((text) => {
-      console.log('[useSpeechToText] Partial result received:', text);
+      logger.debug('STT', `Partial result: "${text}"`);
       setTranscription(text);
     });
 
     service.onFinalResult((text) => {
-      console.log('[useSpeechToText] Final result received:', text);
+      logger.info('STT', `Final result received (length: ${text.length})`);
       setTranscription(text);
       setIsListening(false);
     });
 
     service.onError((errorMessage) => {
-      console.log('[useSpeechToText] Error received:', errorMessage);
+      logger.error('STT', `Error: ${errorMessage}`);
       setError(errorMessage);
       setIsListening(false);
     });
 
     // Cleanup on unmount
     return () => {
-      console.log('[useSpeechToText] Cleanup called');
+      logger.info('STT', 'Cleaning up STT service');
       service.cleanup();
     };
   }, []);
 
   const startListening = useCallback(async () => {
-    console.log('[useSpeechToText] startListening called');
+    logger.info('STT', 'startListening called');
     const service = serviceRef.current;
     if (!service) {
-      console.log('[useSpeechToText] No service available');
+      logger.error('STT', 'No service available');
       return;
     }
 
@@ -93,32 +94,38 @@ export function useSpeechToText(): UseSpeechToTextReturn {
     try {
       // Permission is checked inside startListening() - no need to call it twice
       setIsListening(true);
-      console.log('[useSpeechToText] Calling service.startListening()');
+      logger.debug('STT', 'Calling service.startListening()');
       await service.startListening({
         interimResults: true,
         continuous: true,
       });
-      console.log('[useSpeechToText] service.startListening() completed');
+      logger.info('STT', 'Listening started successfully');
     } catch (e) {
-      console.log('[useSpeechToText] startListening error:', e);
+      logger.error('STT', 'startListening error', e);
       setError('Failed to start speech recognition.');
       setIsListening(false);
     }
   }, []);
 
   const stopListening = useCallback(async () => {
+    logger.info('STT', 'stopListening called');
     const service = serviceRef.current;
-    if (!service) return;
+    if (!service) {
+      logger.warn('STT', 'No service available to stop');
+      return;
+    }
 
     try {
       await service.stopListening();
-    } catch {
-      // Ignore stop errors
+      logger.info('STT', 'Listening stopped');
+    } catch (e) {
+      logger.warn('STT', 'Error stopping listening (ignored)', e);
     }
     setIsListening(false);
   }, []);
 
   const resetTranscription = useCallback(() => {
+    logger.debug('STT', 'Resetting transcription');
     setTranscription('');
     setError(null);
   }, []);

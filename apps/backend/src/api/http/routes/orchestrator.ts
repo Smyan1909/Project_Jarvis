@@ -399,6 +399,13 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
           error: result.error,
         }),
       });
+      
+      // Force flush to ensure the completion event is sent immediately
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((stream as any).flush) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (stream as any).flush();
+      }
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -416,6 +423,13 @@ orchestratorRoutes.post('/run', zValidator('json', orchestratorRunSchema), async
           stack: process.env.NODE_ENV === 'development' ? errorStack : undefined,
         }),
       });
+      
+      // Force flush to ensure the error event is sent immediately
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((stream as any).flush) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (stream as any).flush();
+      }
     } finally {
       eventStreamAdapter.unregisterWriter(runId, writer);
     }
@@ -464,6 +478,13 @@ orchestratorRoutes.get('/run/:runId/events', async (c) => {
         event: 'error',
         data: JSON.stringify({ message: 'Run not found' }),
       });
+      
+      // Force flush to ensure the error event is sent immediately
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((stream as any).flush) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (stream as any).flush();
+      }
       return;
     }
 
@@ -473,6 +494,13 @@ orchestratorRoutes.get('/run/:runId/events', async (c) => {
         event: event.type,
         data: JSON.stringify(event),
       });
+      
+      // Force flush to ensure events are sent immediately
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((stream as any).flush) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (stream as any).flush();
+      }
 
       // Close the stream when the run is complete
       if (event.type === 'orchestrator.status') {
