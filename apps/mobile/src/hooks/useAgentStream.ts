@@ -8,6 +8,7 @@ import { orchestratorApi } from '../services/api';
 import { getMockResponse } from '../services/mockAgent';
 import { useTaskObservability } from './useTaskObservability';
 import { DEMO_MODE, LOAD_HISTORY_ON_STARTUP } from '../config';
+import { logger } from '../utils/logger';
 import type { StreamEvent } from '../services/websocket';
 
 // =============================================================================
@@ -46,10 +47,12 @@ interface UseAgentStreamResult {
 interface ParsedSSEResult {
   events: StreamEvent[];
   remaining: string;
+  parseErrors: string[];
 }
 
 function parseSSE(buffer: string): ParsedSSEResult {
   const events: StreamEvent[] = [];
+  const parseErrors: string[] = [];
   const lines = buffer.split('\n');
   let remaining = '';
   let currentEvent = '';
@@ -78,7 +81,9 @@ function parseSSE(buffer: string): ParsedSSEResult {
         }
         events.push(parsed);
       } catch (e) {
-        console.error('[SSE] Failed to parse event:', currentData);
+        const errorMsg = e instanceof Error ? e.message : String(e);
+        logger.error('AgentStream', `Failed to parse SSE event: ${errorMsg}`, { rawData: currentData });
+        parseErrors.push(`Failed to parse: ${currentData.substring(0, 100)}... - ${errorMsg}`);
       }
       currentEvent = '';
       currentData = '';
@@ -90,8 +95,15 @@ function parseSSE(buffer: string): ParsedSSEResult {
     remaining = lines.slice(-2).join('\n');
   }
 
-  return { events, remaining };
+  return { events, remaining, parseErrors };
 }
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const STREAM_TIMEOUT_MS = 30000; // 30 seconds timeout for no data
+const MAX_BUFFER_SIZE = 100000; // 100KB max buffer before warning
 
 // =============================================================================
 // Hook
@@ -104,14 +116,62 @@ export function useAgentStream(): UseAgentStreamResult {
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingContentRef = useRef<string>('');
   const currentMessageIdRef = useRef<string | null>(null);
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const { processEvent, startRun, clearRun, status: orchestratorStatus } = useTaskObservability();
 
+  // Cleanup function for unmount
+  const cleanupStream = useCallback(() => {
+    logger.info('AgentStream', 'Cleaning up stream resources');
+    
+    // Clear timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    
+    // Cancel reader
+    if (readerRef.current) {
+      logger.debug('AgentStream', 'Cancelling stream reader');
+      readerRef.current.cancel().catch((err) => {
+        logger.warn('AgentStream', 'Error cancelling reader (ignored)', err);
+      });
+      readerRef.current = null;
+    }
+    
+    // Abort controller
+    if (abortControllerRef.current) {
+      logger.debug('AgentStream', 'Aborting fetch request');
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    
+    setIsLoading(false);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      logger.info('AgentStream', 'useAgentStream unmounting - cleaning up');
+      cleanupStream();
+    };
+  }, [cleanupStream]);
+
   // Load conversation history on mount (if enabled)
   useEffect(() => {
-    if (DEMO_MODE) return;
-    if (!LOAD_HISTORY_ON_STARTUP) return;
+    logger.info('AgentStream', 'useAgentStream mounted');
     
+    if (DEMO_MODE) {
+      logger.info('AgentStream', 'Demo mode - skipping history load');
+      return;
+    }
+    if (!LOAD_HISTORY_ON_STARTUP) {
+      logger.info('AgentStream', 'History loading disabled');
+      return;
+    }
+    
+    logger.info('AgentStream', 'Loading conversation history');
     orchestratorApi.getHistory(50)
       .then((data) => {
         const historicalMessages: Message[] = data.messages
@@ -121,10 +181,11 @@ export function useAgentStream(): UseAgentStreamResult {
             role: m.role as 'user' | 'assistant',
             content: m.content,
           }));
+        logger.info('AgentStream', `Loaded ${historicalMessages.length} historical messages`);
         setMessages(historicalMessages);
       })
       .catch((err) => {
-        console.error('[AgentStream] Failed to load history:', err);
+        logger.error('AgentStream', 'Failed to load history', err);
       });
   }, []);
 
@@ -251,6 +312,7 @@ export function useAgentStream(): UseAgentStreamResult {
 
   const sendMessage = useCallback(
     async (content: string, onResponseReady?: (text: string, messageId: string) => void): Promise<void> => {
+      logger.info('AgentStream', 'Sending message', { contentLength: content.length });
       setError(null);
       setIsLoading(true);
       streamingContentRef.current = '';
@@ -262,9 +324,11 @@ export function useAgentStream(): UseAgentStreamResult {
         content,
       };
       setMessages((prev) => [...prev, userMessage]);
+      logger.debug('AgentStream', 'User message added', { messageId: userMessage.id });
 
       // Demo mode: use mock responses
       if (DEMO_MODE) {
+        logger.info('AgentStream', 'Demo mode - using mock response');
         getMockResponse(content, {
           onResponse: (fullContent) => {
             const messageId = `assistant-${Date.now()}`;
@@ -277,9 +341,11 @@ export function useAgentStream(): UseAgentStreamResult {
             };
             setMessages((prev) => [...prev, assistantMessage]);
             setIsLoading(false);
+            logger.info('AgentStream', 'Mock response complete', { messageId, contentLength: fullContent.length });
             onResponseReady?.(fullContent, messageId);
           },
           onError: (errorMessage) => {
+            logger.error('AgentStream', 'Mock response error', { error: errorMessage });
             setError(errorMessage);
             setIsLoading(false);
           },
@@ -297,13 +363,18 @@ export function useAgentStream(): UseAgentStreamResult {
         isStreaming: true,
       };
       setMessages((prev) => [...prev, assistantMessage]);
+      logger.info('AgentStream', 'Starting SSE stream', { messageId });
 
       // Start observability tracking
       const runId = `run-${Date.now()}`;
+      logger.info('AgentStream', 'Starting observability tracking', { runId });
       startRun(runId);
 
       // Create abort controller for cancellation
       abortControllerRef.current = new AbortController();
+
+      // Track last activity for timeout
+      let lastActivityTime = Date.now();
 
       try {
         const response = await orchestratorApi.startRun(content, undefined, abortControllerRef.current?.signal);
@@ -317,31 +388,82 @@ export function useAgentStream(): UseAgentStreamResult {
         if (!reader) {
           throw new Error('No response body');
         }
+        
+        // Store reader reference for cleanup
+        readerRef.current = reader;
 
         const decoder = new TextDecoder();
         let buffer = '';
         let finalContent = '';
+        let eventCount = 0;
+        let allParseErrors: string[] = [];
+
+        // Set up timeout check
+        const checkTimeout = () => {
+          const timeSinceLastActivity = Date.now() - lastActivityTime;
+          if (timeSinceLastActivity > STREAM_TIMEOUT_MS) {
+            logger.error('AgentStream', `Stream timeout after ${STREAM_TIMEOUT_MS}ms without data`);
+            throw new Error('Stream timeout - no data received from server');
+          }
+        };
 
         while (true) {
-          const { done, value } = await reader.read();
+          // Check timeout before reading
+          checkTimeout();
+          
+          // Set timeout for this read operation
+          timeoutRef.current = setTimeout(() => {
+            logger.warn('AgentStream', 'Read operation timeout - cancelling stream');
+            cleanupStream();
+            setError('Stream timeout - connection stalled');
+          }, STREAM_TIMEOUT_MS);
+
+          let readResult: { done: boolean; value?: Uint8Array };
+          try {
+            readResult = await reader.read();
+            lastActivityTime = Date.now(); // Update activity time on successful read
+          } catch (readError) {
+            logger.error('AgentStream', 'Error reading from stream', readError);
+            throw new Error(`Stream read error: ${readError instanceof Error ? readError.message : String(readError)}`);
+          } finally {
+            // Clear timeout after read completes
+            if (timeoutRef.current) {
+              clearTimeout(timeoutRef.current);
+              timeoutRef.current = null;
+            }
+          }
+
+          const { done, value } = readResult;
 
           if (done) {
+            logger.info('AgentStream', 'SSE stream complete', { eventsReceived: eventCount });
             break;
           }
 
           // Check for cancellation
           if (abortControllerRef.current?.signal.aborted) {
+            logger.info('AgentStream', 'Request cancelled');
             reader.cancel();
             break;
           }
 
+          // Check buffer size
+          if (buffer.length > MAX_BUFFER_SIZE) {
+            logger.warn('AgentStream', `Buffer exceeded ${MAX_BUFFER_SIZE} bytes - possible parsing issue`);
+          }
+
           buffer += decoder.decode(value, { stream: true });
-          const { events, remaining } = parseSSE(buffer);
+          const { events, remaining, parseErrors } = parseSSE(buffer);
           buffer = remaining;
+          
+          // Collect parse errors
+          if (parseErrors.length > 0) {
+            allParseErrors.push(...parseErrors);
+          }
 
           for (const event of events) {
-            // Debug logging for SSE events
-            console.log('[SSE] Received event:', event.type, event);
+            eventCount++;
+            logger.debug('AgentStream', `SSE event received: ${event.type}`, event);
 
             // Process for observability panel
             processEvent(event);
@@ -353,21 +475,33 @@ export function useAgentStream(): UseAgentStreamResult {
             if (event.type === 'agent.final') {
               const eventData = event as { type: 'agent.final'; content: string };
               finalContent = eventData.content;
+              logger.info('AgentStream', 'Agent response complete', { contentLength: finalContent.length });
             }
+          }
+        }
+
+        // Report parse errors if any
+        if (allParseErrors.length > 0) {
+          logger.warn('AgentStream', `Had ${allParseErrors.length} SSE parse errors during stream`);
+          // Only show error to user if we got no valid events
+          if (eventCount === 0) {
+            setError(`Failed to parse server response. ${allParseErrors[0]}`);
           }
         }
 
         // Call response callback for TTS
         if (finalContent && onResponseReady) {
+          logger.debug('AgentStream', 'Calling TTS callback');
           onResponseReady(finalContent, messageId);
         }
 
         setIsLoading(false);
       } catch (err: any) {
         if (err.name === 'AbortError') {
-          console.log('[AgentStream] Request cancelled');
+          logger.info('AgentStream', 'Request cancelled by user');
         } else {
           const errorMessage = err.message || 'Failed to get response';
+          logger.error('AgentStream', 'Error during message send', { error: errorMessage });
           setError(errorMessage);
           setIsLoading(false);
           
@@ -388,30 +522,32 @@ export function useAgentStream(): UseAgentStreamResult {
           });
         }
       } finally {
+        // Clean up all resources
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        readerRef.current = null;
         abortControllerRef.current = null;
       }
     },
-    [handleChatEvent, processEvent, startRun]
+    [handleChatEvent, processEvent, startRun, cleanupStream]
   );
 
   const cancelRun = useCallback(() => {
+    logger.info('AgentStream', 'Cancelling run');
+    cleanupStream();
+
     if (DEMO_MODE) {
-      setIsLoading(false);
+      logger.debug('AgentStream', 'Demo mode - cancelling mock run');
       return;
     }
-
-    // Abort the fetch request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-
-    setIsLoading(false);
 
     // Mark streaming message as complete
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
       if (lastMessage?.isStreaming) {
+        logger.debug('AgentStream', 'Marking streaming message as complete');
         return [
           ...prev.slice(0, -1),
           { ...lastMessage, isStreaming: false },
@@ -419,12 +555,14 @@ export function useAgentStream(): UseAgentStreamResult {
       }
       return prev;
     });
-  }, []);
+  }, [cleanupStream]);
 
   const clearMessages = useCallback(() => {
+    logger.info('AgentStream', 'Clearing messages');
     setMessages([]);
     setError(null);
     clearRun();
+    logger.info('AgentStream', 'Messages cleared');
   }, [clearRun]);
 
   return {

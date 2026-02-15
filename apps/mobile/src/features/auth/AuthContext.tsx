@@ -8,6 +8,7 @@ import { authApi, setTokens, clearTokens, getAccessToken } from '../../services/
 import { registerForPushNotifications } from '../../services/pushNotifications';
 import { socketManager } from '../../services/websocket';
 import { DEMO_MODE } from '../../config';
+import { logger } from '../../utils/logger';
 
 // =============================================================================
 // Types
@@ -46,10 +47,12 @@ const initialState: AuthState = {
 };
 
 function authReducer(state: AuthState, action: AuthAction): AuthState {
+  logger.debug('AuthReducer', `Action: ${action.type}`);
   switch (action.type) {
     case 'AUTH_START':
       return { ...state, isLoading: true, error: null };
     case 'AUTH_SUCCESS':
+      logger.info('AuthReducer', 'Auth success', { userId: action.payload.id });
       return {
         ...state,
         isLoading: false,
@@ -58,10 +61,16 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         error: null,
       };
     case 'AUTH_FAILURE':
+      logger.error('AuthReducer', 'Auth failure', { error: action.payload });
       return { ...state, isLoading: false, error: action.payload };
     case 'LOGOUT':
+      logger.info('AuthReducer', 'User logged out');
       return { ...state, isAuthenticated: false, user: null, error: null };
     case 'RESTORE_TOKEN':
+      logger.info('AuthReducer', 'Token restored', { 
+        isAuthenticated: action.payload.isAuthenticated,
+        userId: action.payload.user?.id 
+      });
       return {
         ...state,
         isLoading: false,
@@ -69,6 +78,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         user: action.payload.user,
       };
     case 'CLEAR_ERROR':
+      logger.debug('AuthReducer', 'Error cleared');
       return { ...state, error: null };
     default:
       return state;
@@ -97,9 +107,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Check for existing token on mount
   useEffect(() => {
+    logger.info('AuthContext', 'Checking for existing token on mount');
     async function checkToken() {
       // Demo mode: bypass authentication
       if (DEMO_MODE) {
+        logger.info('AuthContext', 'Demo mode - bypassing authentication');
         dispatch({
           type: 'AUTH_SUCCESS',
           payload: {
@@ -113,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const token = await getAccessToken();
+        logger.debug('AuthContext', 'Token check result', { hasToken: !!token });
         if (token) {
           // Try to get user info
           try {
@@ -130,17 +143,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
 
             // Connect socket and register for push notifications
-            socketManager.connect().catch(console.error);
-            registerForPushNotifications().catch(console.error);
+            logger.info('AuthContext', 'Connecting socket and registering for push notifications');
+            socketManager.connect().catch((err) => logger.error('AuthContext', 'Socket connection error', err));
+            registerForPushNotifications().catch((err) => logger.error('AuthContext', 'Push registration error', err));
           } catch (e) {
             // Token might be expired
+            logger.warn('AuthContext', 'Token validation failed - token may be expired');
             dispatch({ type: 'RESTORE_TOKEN', payload: { isAuthenticated: false, user: null } });
           }
         } else {
+          logger.info('AuthContext', 'No existing token found');
           dispatch({ type: 'RESTORE_TOKEN', payload: { isAuthenticated: false, user: null } });
         }
       } catch (err) {
-        console.error('Error checking token:', err);
+        logger.error('AuthContext', 'Error checking token', err);
         dispatch({ type: 'RESTORE_TOKEN', payload: { isAuthenticated: false, user: null } });
       }
     }
@@ -148,6 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
+    logger.info('AuthContext', 'Login initiated', { email });
     dispatch({ type: 'AUTH_START' });
     try {
       const { user, tokens } = await authApi.login(email, password);
@@ -165,16 +182,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       // Connect socket and register for push notifications
-      socketManager.connect().catch(console.error);
-      registerForPushNotifications().catch(console.error);
+      logger.info('AuthContext', 'Login successful - connecting services');
+      socketManager.connect().catch((err) => logger.error('AuthContext', 'Socket connection error', err));
+      registerForPushNotifications().catch((err) => logger.error('AuthContext', 'Push registration error', err));
     } catch (err: any) {
       const errorMessage = err.message || 'Login failed';
+      logger.error('AuthContext', 'Login failed', { error: errorMessage });
       dispatch({ type: 'AUTH_FAILURE', payload: errorMessage });
       throw err;
     }
   };
 
   const register = async (email: string, password: string, displayName?: string) => {
+    logger.info('AuthContext', 'Registration initiated', { email, displayName });
     dispatch({ type: 'AUTH_START' });
     try {
       const { user, tokens } = await authApi.register(email, password, displayName);
@@ -192,28 +212,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       // Connect socket and register for push notifications
-      socketManager.connect().catch(console.error);
-      registerForPushNotifications().catch(console.error);
+      logger.info('AuthContext', 'Registration successful - connecting services');
+      socketManager.connect().catch((err) => logger.error('AuthContext', 'Socket connection error', err));
+      registerForPushNotifications().catch((err) => logger.error('AuthContext', 'Push registration error', err));
     } catch (err: any) {
       const errorMessage = err.message || 'Registration failed';
+      logger.error('AuthContext', 'Registration failed', { error: errorMessage });
       dispatch({ type: 'AUTH_FAILURE', payload: errorMessage });
       throw err;
     }
   };
 
   const logout = async () => {
+    logger.info('AuthContext', 'Logout initiated');
     try {
       await authApi.logout();
     } catch (e) {
       // Ignore logout API errors
-      console.error('Logout API error:', e);
+      logger.error('AuthContext', 'Logout API error', e);
     }
     await clearTokens();
     socketManager.disconnect();
     dispatch({ type: 'LOGOUT' });
+    logger.info('AuthContext', 'Logout complete');
   };
 
   const clearError = () => {
+    logger.debug('AuthContext', 'Clearing error');
     dispatch({ type: 'CLEAR_ERROR' });
   };
 
@@ -231,7 +256,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {
+    logger.error('AuthContext', 'useAuth called outside of AuthProvider');
     throw new Error('useAuth must be used within an AuthProvider');
   }
+  logger.debug('AuthContext', 'useAuth called', { isAuthenticated: context.isAuthenticated });
   return context;
 }
