@@ -22,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import { useAgentStream } from '../hooks/useAgentStream';
 import { useTextToSpeech } from '../hooks/useTextToSpeech';
 import { useChatQueue } from '../hooks/useChatQueue';
@@ -30,6 +31,7 @@ import { SpeechPanel, SpeechPanelRef } from '../components/SpeechPanel';
 import { TaskObservabilityPanel } from '../components/TaskObservabilityPanel';
 import { colors } from '../theme/colors';
 import { DEMO_MODE, SPEECH_CONFIG } from '../config';
+import { logger } from '../utils/logger';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -49,6 +51,8 @@ interface Message {
 // =============================================================================
 
 export function ChatScreen() {
+  logger.info('ChatScreen', 'ChatScreen component rendering');
+  
   const [input, setInput] = useState('');
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(SPEECH_CONFIG.autoPlayResponses);
   const [currentlyPlayingId, setCurrentlyPlayingId] = useState<string | null>(null);
@@ -78,14 +82,29 @@ export function ChatScreen() {
   // Clear currentlyPlayingId when audio finishes
   useEffect(() => {
     if (!isSpeaking && currentlyPlayingId) {
+      logger.debug('ChatScreen', 'Audio finished, clearing currentlyPlayingId');
       setCurrentlyPlayingId(null);
     }
   }, [isSpeaking, currentlyPlayingId]);
 
+  // Log messages changes
+  useEffect(() => {
+    logger.debug('ChatScreen', `Messages updated: ${messages.length} total`);
+  }, [messages]);
+
+  // Log error changes
+  useEffect(() => {
+    if (error) {
+      logger.error('ChatScreen', `Error state: ${error}`);
+    }
+  }, [error]);
+
   // Toggle speech panel
   const toggleSpeechPanel = useCallback(() => {
-    if (speechPanelRef.current?.isOpen()) {
-      speechPanelRef.current.close();
+    const isOpen = speechPanelRef.current?.isOpen();
+    logger.info('ChatScreen', `Toggling speech panel: ${isOpen ? 'closing' : 'opening'}`);
+    if (isOpen) {
+      speechPanelRef.current?.close();
     } else {
       speechPanelRef.current?.open();
     }
@@ -93,6 +112,7 @@ export function ChatScreen() {
 
   // Toggle observability panel
   const openObservabilityPanel = useCallback(() => {
+    logger.info('ChatScreen', 'Opening observability panel');
     setShowObservabilityPanel(true);
     Animated.spring(panelTranslateX, {
       toValue: 0,
@@ -103,6 +123,7 @@ export function ChatScreen() {
   }, [panelTranslateX]);
 
   const closeObservabilityPanel = useCallback(() => {
+    logger.info('ChatScreen', 'Closing observability panel');
     Animated.spring(panelTranslateX, {
       toValue: SCREEN_WIDTH * 0.85,
       useNativeDriver: true,
@@ -116,8 +137,9 @@ export function ChatScreen() {
   // Swipe gesture to open panel
   const swipeGesture = Gesture.Pan()
     .onUpdate((event) => {
+      'worklet';
       if (event.translationX < -50 && !showObservabilityPanel) {
-        openObservabilityPanel();
+        runOnJS(openObservabilityPanel)();
       }
     })
     .activeOffsetX([-20, 20]);
@@ -125,10 +147,16 @@ export function ChatScreen() {
   // Send message via queue - allows sending while previous messages are processing
   const handleSend = () => {
     const trimmedInput = input.trim();
-    if (!trimmedInput) return;
+    if (!trimmedInput) {
+      logger.warn('ChatScreen', 'Attempted to send empty message');
+      return;
+    }
+
+    logger.info('ChatScreen', `Sending message (length: ${trimmedInput.length})`);
 
     // Stop any ongoing TTS before sending new message
     if (isSpeaking) {
+      logger.debug('ChatScreen', 'Stopping TTS before sending new message');
       stopSpeaking();
       setCurrentlyPlayingId(null);
     }
@@ -140,24 +168,28 @@ export function ChatScreen() {
   };
 
   const toggleTts = useCallback(() => {
+    logger.info('ChatScreen', `Toggling TTS: ${ttsEnabled ? 'disabling' : 'enabling'}`);
     if (isSpeaking) {
       stopSpeaking();
     }
     setTtsEnabled((prev) => !prev);
-  }, [isSpeaking, stopSpeaking]);
+  }, [isSpeaking, stopSpeaking, ttsEnabled]);
 
   const handleTranscriptionConfirmed = useCallback((text: string) => {
+    logger.info('ChatScreen', `Transcription confirmed (length: ${text.length})`);
     setInput((prev) => (prev.trim() ? `${prev} ${text}` : text));
   }, []);
 
   const handleTranscriptionCancelled = useCallback(() => {
-    // Nothing to do - transcription was discarded
+    logger.info('ChatScreen', 'Transcription cancelled');
   }, []);
 
   const handlePlayMessage = useCallback(
     (messageId: string, content: string) => {
+      logger.info('ChatScreen', `Play message requested: ${messageId}`);
       // If this message is already playing, stop it
       if (currentlyPlayingId === messageId) {
+        logger.debug('ChatScreen', 'Message already playing, stopping');
         if (isSpeaking) {
           stopSpeaking();
         }
@@ -167,9 +199,11 @@ export function ChatScreen() {
 
       // Stop any other playing message and start this one
       if (isSpeaking) {
+        logger.debug('ChatScreen', 'Stopping current playback');
         stopSpeaking();
       }
       setCurrentlyPlayingId(messageId);
+      logger.info('ChatScreen', `Speaking message: ${messageId} (length: ${content.length})`);
       speak(content);
     },
     [currentlyPlayingId, isSpeaking, stopSpeaking, speak]

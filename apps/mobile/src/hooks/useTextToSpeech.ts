@@ -8,6 +8,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getTextToSpeechService, ITextToSpeechService, Voice, getCurrentProvider } from '../services/speech';
 import { TTSOptions } from '../services/speech/types';
+import { logger } from '../utils/logger';
 
 export interface UseTextToSpeechReturn {
   /** Whether the service is currently speaking */
@@ -33,6 +34,7 @@ export interface UseTextToSpeechReturn {
 }
 
 export function useTextToSpeech(): UseTextToSpeechReturn {
+  logger.info('TTS', 'Initializing useTextToSpeech hook');
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAvailable, setIsAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,51 +42,67 @@ export function useTextToSpeech(): UseTextToSpeechReturn {
   
   const serviceRef = useRef<ITextToSpeechService | null>(null);
   const provider = getCurrentProvider();
+  logger.debug('TTS', 'Current provider', { provider });
 
   // Initialize service and set up callbacks
   useEffect(() => {
+    logger.info('TTS', 'Initializing TTS service');
     const service = getTextToSpeechService();
     serviceRef.current = service;
 
     // Check availability
-    service.isAvailable().then(setIsAvailable);
+    service.isAvailable().then((available) => {
+      setIsAvailable(available);
+      logger.info('TTS', `Service available: ${available}`);
+    });
 
     // Set up callbacks
     service.onStart(() => {
+      logger.info('TTS', 'Speech started');
       setIsSpeaking(true);
       setError(null);
     });
 
     service.onDone(() => {
+      logger.info('TTS', 'Speech completed');
       setIsSpeaking(false);
     });
 
     service.onError((errorMessage) => {
+      logger.error('TTS', `Error: ${errorMessage}`);
       setError(errorMessage);
       setIsSpeaking(false);
     });
 
     // Cleanup on unmount
     return () => {
+      logger.info('TTS', 'Cleaning up TTS service');
       service.cleanup();
     };
   }, []);
 
   const speak = useCallback(async (text: string, options?: TTSOptions) => {
+    logger.info('TTS', `Speaking text (length: ${text.length})`);
     const service = serviceRef.current;
-    if (!service) return;
+    if (!service) {
+      logger.error('TTS', 'No TTS service available');
+      return;
+    }
 
     setError(null);
     
     try {
       await service.speak(text, options);
+      logger.info('TTS', 'Speech request successful');
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Failed to speak';
+      logger.error('TTS', `Speak error: ${message}`);
       setError(message);
     }
   }, []);
 
   const stop = useCallback(() => {
+    logger.info('TTS', 'Stopping speech');
     const service = serviceRef.current;
     if (service) {
       service.stop();
@@ -93,6 +111,7 @@ export function useTextToSpeech(): UseTextToSpeechReturn {
   }, []);
 
   const pause = useCallback(() => {
+    logger.debug('TTS', 'Pausing speech');
     const service = serviceRef.current;
     if (service) {
       service.pause();
@@ -100,6 +119,7 @@ export function useTextToSpeech(): UseTextToSpeechReturn {
   }, []);
 
   const resume = useCallback(() => {
+    logger.debug('TTS', 'Resuming speech');
     const service = serviceRef.current;
     if (service) {
       service.resume();
@@ -107,14 +127,19 @@ export function useTextToSpeech(): UseTextToSpeechReturn {
   }, []);
 
   const loadVoices = useCallback(async () => {
+    logger.info('TTS', 'Loading available voices');
     const service = serviceRef.current;
-    if (!service) return;
+    if (!service) {
+      logger.warn('TTS', 'Cannot load voices - no service available');
+      return;
+    }
 
     try {
       const availableVoices = await service.getAvailableVoices();
+      logger.info('TTS', `Loaded ${availableVoices.length} voices`);
       setVoices(availableVoices);
-    } catch {
-      // Ignore voice loading errors
+    } catch (e) {
+      logger.error('TTS', 'Failed to load voices', e);
     }
   }, []);
 

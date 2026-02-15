@@ -238,6 +238,8 @@ export class OrchestratorEventStreamAdapter implements EventStreamPort {
 export function createHonoSSEWriter(stream: {
   writeSSE: (data: { data: string; event?: string; id?: string }) => Promise<void>;
   close: () => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  flush?: () => void;
 }): SSEStreamWriter {
   return {
     write: async (data: string) => {
@@ -255,9 +257,24 @@ export function createHonoSSEWriter(stream: {
       }
 
       await stream.writeSSE({ data: eventData, event });
+      
+      // Force flush for Node.js server to prevent buffering
+      // This is required because @hono/node-server buffers SSE responses
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((stream as any).flush) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (stream as any).flush();
+      }
     },
     writeEvent: async (event: string, data: string) => {
       await stream.writeSSE({ data, event });
+      
+      // Force flush for Node.js server to prevent buffering
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((stream as any).flush) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (stream as any).flush();
+      }
     },
     close: () => {
       stream.close();

@@ -6,6 +6,7 @@
 import { io, Socket } from 'socket.io-client';
 import { getAccessToken } from './api';
 import { SOCKET_URL, DEMO_MODE } from '../config';
+import { logger } from '../utils/logger';
 
 // =============================================================================
 // Types
@@ -61,31 +62,38 @@ export function createSocketManager(): SocketManager {
   const runListeners = new Map<string, Set<(event: StreamEvent) => void>>();
 
   function setStatus(newStatus: ConnectionStatus) {
-    status = newStatus;
-    statusListeners.forEach((cb) => cb(status));
+    if (status !== newStatus) {
+      logger.info('Socket', `Status changed: ${status} -> ${newStatus}`);
+      status = newStatus;
+      statusListeners.forEach((cb) => cb(status));
+    }
   }
 
   async function connect(): Promise<void> {
+    logger.info('Socket', 'Connection requested');
+    
     // Skip in demo mode
     if (DEMO_MODE) {
-      console.log('[Socket] Demo mode - skipping connection');
+      logger.info('Socket', 'Demo mode - skipping connection');
       return;
     }
 
     // Already connected
     if (socket?.connected) {
+      logger.debug('Socket', 'Already connected');
       return;
     }
 
     // Get auth token
     const token = await getAccessToken();
     if (!token) {
-      console.log('[Socket] No access token available');
+      logger.error('Socket', 'No access token available');
       setStatus('error');
       return;
     }
 
     setStatus('connecting');
+    logger.info('Socket', `Connecting to ${SOCKET_URL}`);
 
     return new Promise((resolve, reject) => {
       socket = io(SOCKET_URL, {
@@ -99,30 +107,42 @@ export function createSocketManager(): SocketManager {
       });
 
       socket.on('connect', () => {
-        console.log('[Socket] Connected');
+        logger.info('Socket', `Connected (ID: ${socket?.id})`);
         setStatus('connected');
         reconnectAttempts = 0;
         resolve();
       });
 
       socket.on('disconnect', (reason) => {
-        console.log('[Socket] Disconnected:', reason);
+        logger.info('Socket', `Disconnected: ${reason}`);
         setStatus('disconnected');
       });
 
       socket.on('connect_error', (error) => {
-        console.error('[Socket] Connection error:', error.message);
+        logger.error('Socket', `Connection error: ${error.message}`);
         reconnectAttempts++;
+        logger.warn('Socket', `Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
         if (reconnectAttempts >= maxReconnectAttempts) {
+          logger.error('Socket', 'Max reconnection attempts reached');
           setStatus('error');
           reject(error);
         }
       });
 
+      socket.on('reconnect', (attemptNumber) => {
+        logger.info('Socket', `Reconnected on attempt ${attemptNumber}`);
+      });
+
+      socket.on('reconnect_attempt', (attemptNumber) => {
+        logger.debug('Socket', `Reconnection attempt ${attemptNumber}`);
+      });
+
       // Handle agent events broadcast to user
       socket.on('agent:event', (event: StreamEvent) => {
+        logger.debug('Socket', `Agent event received: ${event.type}`, event);
         // Broadcast to all run listeners (for events not specific to a run)
-        runListeners.forEach((listeners) => {
+        runListeners.forEach((listeners, runId) => {
+          logger.debug('Socket', `Broadcasting to ${listeners.size} listeners for run ${runId}`);
           listeners.forEach((cb) => cb(event));
         });
       });
@@ -132,9 +152,12 @@ export function createSocketManager(): SocketManager {
         // Check if event is for a specific run (format: run:<runId>)
         if (eventName.startsWith('run:')) {
           const runId = eventName.slice(4);
+          logger.debug('Socket', `Run-specific event received: ${eventName}`, { runId, type: event.type });
           const listeners = runListeners.get(runId);
           if (listeners) {
             listeners.forEach((cb) => cb(event));
+          } else {
+            logger.warn('Socket', `No listeners found for run ${runId}`);
           }
         }
       });
@@ -142,32 +165,46 @@ export function createSocketManager(): SocketManager {
   }
 
   function disconnect(): void {
+    logger.info('Socket', 'Disconnecting');
     if (socket) {
       socket.disconnect();
       socket = null;
+      logger.info('Socket', 'Disconnected successfully');
+    } else {
+      logger.debug('Socket', 'No active socket to disconnect');
     }
     setStatus('disconnected');
   }
 
   function subscribeToRun(runId: string, callback: (event: StreamEvent) => void): () => void {
+    logger.info('Socket', `Subscribing to run: ${runId}`);
+    
     // Add listener
     if (!runListeners.has(runId)) {
       runListeners.set(runId, new Set());
+      logger.debug('Socket', `Created new listener set for run: ${runId}`);
     }
     runListeners.get(runId)!.add(callback);
+    logger.debug('Socket', `Added listener for run ${runId}. Total listeners: ${runListeners.get(runId)!.size}`);
 
     // Subscribe to run events via socket
     if (socket?.connected) {
+      logger.debug('Socket', `Emitting subscribe:run for ${runId}`);
       socket.emit('subscribe:run', runId);
+    } else {
+      logger.warn('Socket', `Cannot subscribe to run ${runId} - socket not connected`);
     }
 
     // Return unsubscribe function
     return () => {
+      logger.info('Socket', `Unsubscribing from run: ${runId}`);
       const listeners = runListeners.get(runId);
       if (listeners) {
         listeners.delete(callback);
+        logger.debug('Socket', `Removed listener for run ${runId}. Remaining: ${listeners.size}`);
         if (listeners.size === 0) {
           runListeners.delete(runId);
+          logger.debug('Socket', `Deleted empty listener set for run: ${runId}`);
           // Unsubscribe from run events
           if (socket?.connected) {
             socket.emit('unsubscribe:run', runId);
@@ -182,10 +219,14 @@ export function createSocketManager(): SocketManager {
   }
 
   function onStatusChange(callback: (status: ConnectionStatus) => void): () => void {
+    logger.debug('Socket', `Status change listener added. Total listeners: ${statusListeners.size + 1}`);
     statusListeners.add(callback);
     // Immediately call with current status
     callback(status);
-    return () => statusListeners.delete(callback);
+    return () => {
+      logger.debug('Socket', 'Status change listener removed');
+      statusListeners.delete(callback);
+    };
   }
 
   function isConnected(): boolean {

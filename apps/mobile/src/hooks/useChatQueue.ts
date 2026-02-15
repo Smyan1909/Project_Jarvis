@@ -5,6 +5,7 @@
 // submit multiple messages while previous ones are still being processed.
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { logger } from '../utils/logger';
 
 // =============================================================================
 // Types
@@ -63,12 +64,19 @@ export function useChatQueue({
 
   // Process the next item in the queue
   const processNext = useCallback(async () => {
-    if (isProcessingRef.current) return;
+    if (isProcessingRef.current) {
+      logger.debug('ChatQueue', 'Already processing, skipping');
+      return;
+    }
 
     // Find the next queued item
     const nextItem = queue.find((item) => item.status === 'queued');
-    if (!nextItem) return;
+    if (!nextItem) {
+      logger.debug('ChatQueue', 'No queued items to process');
+      return;
+    }
 
+    logger.info('ChatQueue', `Processing queue item: ${nextItem.id}`);
     isProcessingRef.current = true;
 
     // Mark as processing
@@ -85,6 +93,7 @@ export function useChatQueue({
       await processMessageRef.current(nextItem.content);
 
       // Mark as completed
+      logger.info('ChatQueue', `Queue item completed: ${nextItem.id}`);
       setQueue((prev) =>
         prev.map((item) =>
           item.id === nextItem.id
@@ -95,6 +104,7 @@ export function useChatQueue({
     } catch (error) {
       // Mark as failed
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error('ChatQueue', `Queue item failed: ${nextItem.id}`, { error: errorMessage });
       setQueue((prev) =>
         prev.map((item) =>
           item.id === nextItem.id
@@ -124,6 +134,8 @@ export function useChatQueue({
       addedAt: new Date(),
     };
 
+    logger.info('ChatQueue', `Enqueuing message: ${newItem.id} (length: ${content.length})`);
+
     setQueue((prev) => {
       // Add new item and trim old completed items if needed
       const newQueue = [...prev, newItem];
@@ -136,21 +148,28 @@ export function useChatQueue({
         .filter((item) => item.status === 'completed' || item.status === 'failed')
         .slice(-maxQueueHistory);
 
-      return [...pendingItems, ...completedItems].sort(
+      const finalQueue = [...pendingItems, ...completedItems].sort(
         (a, b) => a.addedAt.getTime() - b.addedAt.getTime()
       );
+
+      logger.debug('ChatQueue', `Queue updated: ${pendingItems.length} pending, ${completedItems.length} completed`);
+      return finalQueue;
     });
   }, [maxQueueHistory]);
 
   // Clear completed/failed items
   const clearCompleted = useCallback(() => {
-    setQueue((prev) =>
-      prev.filter((item) => item.status === 'queued' || item.status === 'processing')
-    );
+    logger.info('ChatQueue', 'Clearing completed items');
+    setQueue((prev) => {
+      const cleared = prev.filter((item) => item.status === 'queued' || item.status === 'processing');
+      logger.debug('ChatQueue', `Cleared ${prev.length - cleared.length} completed items`);
+      return cleared;
+    });
   }, []);
 
   // Clear all items
   const clearAll = useCallback(() => {
+    logger.info('ChatQueue', 'Clearing all queue items');
     setQueue([]);
     isProcessingRef.current = false;
   }, []);
