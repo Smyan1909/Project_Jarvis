@@ -1,0 +1,48 @@
+{
+  "id": "multi-agent-workflow",
+  "displayName": "Multi-Agent Workflow",
+  "description": "Demonstrates orchestrator spawning multiple agent types in a coordinated workflow",
+  "visibility": {
+    "showBanner": true,
+    "bannerMessage": "🤖 Running example prompt: Multi-Agent Workflow - This demonstrates cross-agent collaboration"
+  },
+  "execution": {
+    "hideContextHistory": true,
+    "workingDirectory": "/tmp/exprompt_playground",
+    "plan": {
+      "reasoning": "This example demonstrates the orchestrator coordinating multiple specialized agents to complete a complex task. We'll have a research agent gather market data, a coding agent build a dashboard, and a productivity agent document the process. This showcases how the orchestrator delegates and coordinates between different agent types.",
+      "tasks": [
+        {
+          "tempId": "task_1",
+          "description": "Research current trending JavaScript frameworks in 2024: gather data on popularity metrics, GitHub stars, npm downloads, and community sentiment for React, Vue, Svelte, and Solid. Save research data to /tmp/exprompt_playground.",
+          "agentType": "research",
+          "dependencies": []
+        },
+        {
+          "tempId": "task_2",
+          "description": "Create a simple HTML dashboard in /tmp/exprompt_playground that visualizes the research data with charts showing framework popularity trends, including a responsive layout and interactive elements. All file operations and terminal commands must use /tmp/exprompt_playground as the working directory.",
+          "agentType": "coding",
+          "dependencies": ["task_1"]
+        },
+        {
+          "tempId": "task_3",
+          "description": "Create a comprehensive project README in /tmp/exprompt_playground documenting the dashboard features, how to run it locally, data sources, and future enhancement ideas. Save documentation to /tmp/exprompt_playground.",
+          "agentType": "productivity",
+          "dependencies": ["task_2"]
+        },
+        {
+          "tempId": "task_4",
+          "description": "Add a TODO item to track future enhancements like adding more frameworks, implementing real-time data updates, and creating a comparison feature. Store TODO in project memory.",
+          "agentType": "productivity",
+          "dependencies": ["task_3"]
+        },
+        {
+          "tempId": "task_5",
+          "description": "Perform final review in /tmp/exprompt_playground: check dashboard functionality, verify all data is properly displayed, ensure documentation is complete, and create a summary of what was accomplished. All file operations must use /tmp/exprompt_playground as the working directory.",
+          "agentType": "coding",
+          "dependencies": ["task_2", "task_4"]
+        }
+      ]
+    }
+  }
+}

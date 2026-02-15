@@ -39,6 +39,10 @@ const envSchema = z.object({
     // Monitoring Agent (Composio integration)
     COMPOSIO_WEBHOOK_URL: z.string().url().optional(),
     COMPOSIO_WEBHOOK_SECRET: z.string().optional(),
+
+    // Feature Flags
+    ENABLE_EXAMPLE_PROMPTS: z.enum(['true', 'false']).default('false'),
+    EXAMPLE_PROMPTS_PATH: z.string().default('./src/domain/orchestrator/example-prompts'),
 });
 
 export type Env = z.infer<typeof envSchema>;

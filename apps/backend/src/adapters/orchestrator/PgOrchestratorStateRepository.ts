@@ -167,13 +167,15 @@ export class PgOrchestratorStateRepository implements IOrchestratorStateReposito
 
   async createTaskNodes(
     planId: string,
-    nodes: Array<Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'>>
+    nodes: Array<Omit<TaskNode, 'id' | 'createdAt' | 'completedAt' | 'retryCount' | 'assignedAgentId' | 'result' | 'status'> & { id?: string }>
   ): Promise<TaskNode[]> {
     if (nodes.length === 0) return [];
 
     // Insert all nodes at once - dependencies are stored as JSONB arrays
+    // Include id if provided (for example prompts with pre-generated UUIDs)
     const valuesToInsert = nodes.map((node) => ({
       planId,
+      ...(node.id && { id: node.id }),  // Include id only if provided
       description: node.description,
       agentType: node.agentType,
       dependencies: node.dependencies || [],

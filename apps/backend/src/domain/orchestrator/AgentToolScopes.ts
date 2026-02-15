@@ -107,9 +107,11 @@ export const AGENT_TOOL_SCOPES: Record<AgentType, string[]> = {
     // === Composio MCP Tools ===
     // Meta-tools for dynamic tool discovery and execution via Composio Tool Router
     // These require MCP_SERVER_<N>_NAME=composio in environment variables
-    'composio__COMPOSIO_SEARCH_TOOLS',        // Search for available tools/integrations
+    // IMPORTANT: Follow the 3-step workflow: SEARCH -> GET_SCHEMAS -> EXECUTE
+    'composio__COMPOSIO_SEARCH_TOOLS',        // Step 1: Search for available tools/integrations
+    'composio__COMPOSIO_GET_TOOL_SCHEMAS',    // Step 2: Get full input schemas before execution (REQUIRED)
     'composio__COMPOSIO_MANAGE_CONNECTIONS',  // Initiate OAuth connections for apps
-    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',  // Execute discovered tools
+    'composio__COMPOSIO_MULTI_EXECUTE_TOOL',  // Step 3: Execute discovered tools with proper args
     'composio__COMPOSIO_REMOTE_WORKBENCH',    // Remote workbench for complex tasks
     'composio__COMPOSIO_REMOTE_BASH_TOOL',    // Remote bash execution
     
@@ -225,9 +227,16 @@ Focus on gathering accurate, comprehensive information.`,
 - Git operations (commit, branch, merge, push with confirmation)
 - Browser automation via Playwright (navigation, interaction, inspection)
 - Composio Tool Router integration for 100+ external services (GitHub, Slack, Jira, etc.)
-  - Use COMPOSIO_SEARCH_TOOLS to discover available integrations
-  - Use COMPOSIO_MANAGE_CONNECTIONS to set up OAuth for apps
-  - Use COMPOSIO_MULTI_EXECUTE_TOOL to execute discovered tools
+
+**CRITICAL: Composio 3-Step Workflow (REQUIRED)**
+You MUST follow this exact workflow when using Composio tools:
+1. COMPOSIO_SEARCH_TOOLS - Discover available tools for your task
+2. COMPOSIO_GET_TOOL_SCHEMAS - Get the EXACT input schema for each tool (MANDATORY before execution)
+3. COMPOSIO_MULTI_EXECUTE_TOOL - Execute with arguments that EXACTLY match the schema
+
+NEVER call COMPOSIO_MULTI_EXECUTE_TOOL without first getting the schema via COMPOSIO_GET_TOOL_SCHEMAS.
+The 'arguments' field must be a JSON object matching the schema, NOT a string.
+
 - Complex multi-file refactoring and code generation
 You operate with high autonomy - complete tasks independently and verify with tests.`,
 
